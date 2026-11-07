@@ -138,7 +138,7 @@ class Engine:
 
     def enabled_strategies(self) -> list[Strategy]:
         disabled = set(self.store.get("disabled", []))
-        return sorted((s for s in ALL_STRATEGIES if s.sid not in disabled), key=lambda s: s.priority)
+        return sorted((s for s in ALL_STRATEGIES if s.sid not in disabled), key=lambda s: s.tune.get("priority", s.priority))
 
     async def live_funds(self, max_age: float = 30) -> dict:
         ts, data = self._funds_cache
@@ -279,6 +279,8 @@ class Engine:
 
     def _needs(self) -> set[str]:
         needs = {n for s in self.enabled_strategies() for n in s.needs}
+        if any(s.tune.get("noise_k") is not None for s in self.enabled_strategies()):
+            needs.add("noise")
         for p in self.positions:
             s = STRATEGY_MAP.get(p["strategy"])
             if s:
@@ -511,7 +513,8 @@ class Engine:
             "target": sig.target, "book_fraction": sig.book_fraction, "booked": False,
             "prem_stop": hard_stop, "prem_target": fill.price * (1 + sig.prem_target_pct) if sig.prem_target_pct else None,
             "trail_level": None, "trail_active": False, "sl_order_id": None, "setup_key": sig.setup_key,
-            "time_exit": strat.time_exit.strftime("%H:%M"), "max_hold_min": int(strat.tune.get("max_hold", strat.max_hold_min)),
+            "time_exit": strat.tune.get("time_exit", "15:20" if strat.tune.get("hold_close") else strat.time_exit.strftime("%H:%M")),
+            "max_hold_min": int(strat.tune.get("max_hold", 330 if strat.tune.get("hold_close") else strat.max_hold_min)),
             "meta": sig.meta, "realized_gross": 0.0, "exit_value": 0.0, "exit_qty": 0, "exit_orders": 0,
             "last_ltp": fill.price, "delta": round(pick.delta, 2), "note": sig.note, "regime": ctx.regime,
             "entry_order_id": fill.order_id, "exit_legs": [],

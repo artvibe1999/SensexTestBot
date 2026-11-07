@@ -9,7 +9,17 @@ from __future__ import annotations
 import json
 import os
 
-TUNING: dict[str, dict] = {}
+# Evaluation order of the enabled best-6 set (one position at a time, so order decides which
+# signal gets the slot on the same candle). Chosen by a greedy build on Sep 2022 - Oct 2025
+# only; see docs/research_66_79.md.
+TUNING: dict[str, dict] = {
+    "SENSEX_NOISE_61": {"priority": 1},
+    "SENSEX_ORB60_74": {"priority": 2},
+    "SENSEX_INSIDE_71": {"priority": 3},
+    "SENSEX_3DAY_75": {"priority": 4},
+    "SENSEX_LATEMOM_63": {"priority": 5},
+    "SENSEX_HLBRK_66": {"priority": 6},
+}
 
 
 def load_overrides() -> dict[str, dict]:

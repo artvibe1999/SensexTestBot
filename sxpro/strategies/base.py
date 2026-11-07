@@ -106,9 +106,13 @@ class Strategy:
         min_stop_atr k (stop at least k x ATR(14) from entry); rr k (target = k x risk);
         no_target True; book f (book fraction f at target, trail the rest);
         prem_sl p (premium stop -p); max_hold minutes (applied by the engine).
+        Trend-day gates from the 61-65 research: vwap_side True (price on the trade's side of
+        VWAP); day_move x (move from the day open >= x in the trade's direction); noise_k k
+        (price beyond open/prev-close x (1 +/- k x 14-day noise sigma), needs the noise feed);
+        hold_close True (no target, hold to time_exit 15:20 / max_hold 330 unless set).
         """
         t = self.tune
-        if not t:
+        if not t or set(t) <= {"priority", "max_hold", "time_exit"}:
             return sig
         c = ctx.last
         price = float(c["close"])
@@ -128,6 +132,23 @@ class Strategy:
             if l15 is None or sign(sig.direction) * (l15["ema9"] - l15["ema21"]) <= 0:
                 return None
         d = sign(sig.direction)
+        if t.get("vwap_side") and d * (price - float(c["vwap"])) <= 0:
+            return None
+        day_open = float(ctx.today["open"].iloc[0])
+        if t.get("day_move") is not None and d * (price / day_open - 1) < t["day_move"]:
+            return None
+        if t.get("noise_k") is not None:
+            sigma = ctx.aux.get("noise")
+            slot = ctx.n_today - 1
+            if sigma is None or slot >= len(sigma) or sigma[slot] != sigma[slot]:
+                return None
+            k = t["noise_k"] * float(sigma[slot])
+            if d > 0 and price <= max(day_open, ctx.pdc) * (1 + k):
+                return None
+            if d < 0 and price >= min(day_open, ctx.pdc) * (1 - k):
+                return None
+        if t.get("hold_close"):
+            sig.target = None
         stop = sig.sl_price if sig.sl_price is not None else sig.sl_close
         if t.get("min_stop_atr") and stop is not None and c["atr"] > 0:
             want = price - d * t["min_stop_atr"] * float(c["atr"])

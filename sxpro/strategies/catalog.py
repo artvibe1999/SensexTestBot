@@ -791,6 +791,9 @@ ALL_STRATEGIES += STRATEGIES_21_60
 from .catalog_research import STRATEGIES_61_65  # noqa: E402  (research strategies, priority 10)
 
 ALL_STRATEGIES += STRATEGIES_61_65
+from .catalog_research2 import STRATEGIES_66_79  # noqa: E402  (second research screen, priority 10)
+
+ALL_STRATEGIES += STRATEGIES_66_79
 
 from . import tuning as _tuning  # noqa: E402
 
