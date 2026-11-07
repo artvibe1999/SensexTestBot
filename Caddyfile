@@ -12,6 +12,11 @@
 		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
 		-Server
 	}
+	# Legacy Kite redirect URL registered for this app; query string is kept.
+	handle /auth/zerodha/callback {
+		rewrite * /kite/callback
+		reverse_proxy bot:8080
+	}
 	@bot path /kite/callback /health
 	handle @bot {
 		reverse_proxy bot:8080
