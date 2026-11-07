@@ -318,7 +318,7 @@ class Engine:
             if "noise" in needs:
                 sig = self._aux_cache.get(("noise", now.date()))
                 if sig is None:
-                    from .strategies.catalog_research import noise_sigma
+                    from .strategies.catalog import noise_sigma
                     hist = await asyncio.to_thread(self.kite.index_candles, now, "5minute", 30)
                     sig = noise_sigma(hist, now.date())
                     if sig is not None:

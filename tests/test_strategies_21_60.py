@@ -10,7 +10,7 @@ from sxpro.market import build_context
 from sxpro.options import choose_expiry
 from sxpro.strategies import STRATEGY_MAP
 from sxpro.strategies.base import CE, PE, Signal
-from sxpro.strategies.catalog_21_60 import STRATEGIES_21_60, PocBounce43, Spec, pivots
+from sxpro.strategies.catalog import STRATEGIES_21_60, PocBounce43, Spec, pivots
 
 from .fakes import synthetic_candles
 

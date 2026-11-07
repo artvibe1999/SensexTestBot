@@ -12,8 +12,9 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
 * **Regime engine** (framework §2): BULLISH / BEARISH / SIDEWAYS / NEUTRAL, computed on
   5-min and confirmed on 15-min. Bullish disables PUTs, bearish disables CALLs, and
   sideways disables breakout strategies.
-* **60 strategies**: 1–20 in `sxpro/strategies/catalog.py`, 21–60 in
-  `sxpro/strategies/catalog_21_60.py` (specs: `docs/sensex_pro_additional_strategies_*.md`).
+* **79 strategies**, all in `sxpro/strategies/catalog.py`: 1–20 (original), 21–60 (specs:
+  `docs/sensex_pro_additional_strategies_*.md`), 61–79 research (`docs/research_61_65.md`,
+  `docs/research_66_79.md`).
   They are evaluated on every closed 5-min candle, each within its own time window. If
   several strategies signal on the same candle, the first one in catalogue order wins
   (so 1–20 take priority over 21–60).

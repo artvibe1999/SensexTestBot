@@ -177,7 +177,7 @@ class Data:
             out["daily"] = self.daily[self.daily.index.date < today].tail(30)
         if "noise" in needs:
             if today not in self._noise:
-                from .strategies.catalog_research import noise_sigma
+                from .strategies.catalog import noise_sigma
                 lo = pd.Timestamp(today - timedelta(days=40), tz=IST)
                 self._noise[today] = noise_sigma(self.idx5[(self.idx5.index >= lo)], today)
             out["noise"] = self._noise[today]

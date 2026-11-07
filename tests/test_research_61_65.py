@@ -8,7 +8,7 @@ import pytest
 from sxpro.market import build_context
 from sxpro.strategies import ALL_STRATEGIES
 from sxpro.strategies.base import CE, PE
-from sxpro.strategies.catalog_research import STRATEGIES_61_65, noise_sigma
+from sxpro.strategies.catalog import STRATEGIES_61_65, noise_sigma
 
 from .fakes import synthetic_candles
 

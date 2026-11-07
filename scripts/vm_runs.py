@@ -10,7 +10,7 @@ def job(a):
 
 if __name__ == "__main__":
     data, solo_p, out_p = sys.argv[1:4]
-    from sxpro.strategies.catalog_research import STRATEGIES_61_65
+    from sxpro.strategies.catalog import STRATEGIES_61_65
     research = [s.sid for s in STRATEGIES_61_65]
     prof26 = [m["strategy"] for m in json.load(open(solo_p))["summary"][1:] if m["net"] > 0]
     jobs = [(sid, data, sid) for sid in research] + [("research_5", data, research),
