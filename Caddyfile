@@ -1,0 +1,22 @@
+{
+	admin off
+}
+
+{$BOT_DOMAIN} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+		-Server
+	}
+	@bot path /kite/callback /health
+	handle @bot {
+		reverse_proxy bot:8080
+	}
+	handle {
+		respond 404
+	}
+}

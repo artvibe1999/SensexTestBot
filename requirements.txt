@@ -1,0 +1,13 @@
+# kiteconnect is installed with --no-deps (see requirements-kite.txt): it pins
+# autobahn==19.11.2, which has known CVEs. Its runtime deps are listed here with a
+# patched autobahn (only kiteconnect's unused WebSocket ticker imports it).
+pandas==2.2.3
+numpy==2.1.3
+python-telegram-bot==21.6
+aiohttp==3.14.5
+requests==2.34.2
+python-dateutil==2.9.0.post0
+six==1.17.0
+pyOpenSSL==26.4.0
+service-identity==26.1.0
+autobahn[twisted]==26.11.1
