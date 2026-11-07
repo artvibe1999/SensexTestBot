@@ -85,3 +85,51 @@ so when they are enabled they take most of the slots from 21–60.
 * **30, 45:** RSI > 85 with four same-colour candles fully outside the Bollinger Band
   (1 signal, blocked by the regime filter); first-tap order-block retests with an
   engulfing candle did not occur.
+
+## Strategies 1–20 alone (same period and settings)
+
+| Strategy | Trades | Win % | Net ₹ | PF | Max DD ₹ |
+|---|---:|---:|---:|---:|---:|
+| SENSEX_SUP_10 | 318 | 59.1 | 64,884 | 1.08 | 113,249 |
+| SENSEX_VWAP_03 | 20 | 80.0 | 8,979 | 1.81 | 7,648 |
+| SENSEX_VOL_08 | 1 | 100.0 | 3,948 | – | 0 |
+| SENSEX_GAP_07 | 0 | 0.0 | 0 | – | 0 |
+| SENSEX_MCD_18 | 0 | 0.0 | 0 | – | 0 |
+| SENSEX_VWAP_X_16 | 36 | 27.8 | -1,493 | 0.97 | 24,884 |
+| SENSEX_RNG_14 | 11 | 72.7 | -1,624 | 0.85 | 6,815 |
+| SENSEX_MOM_01 | 1 | 0.0 | -3,101 | 0.00 | 3,101 |
+| SENSEX_0DTE_12 | 6 | 33.3 | -4,080 | 0.79 | 10,454 |
+| SENSEX_FIB_19 | 32 | 40.6 | -4,270 | 0.89 | 23,418 |
+| SENSEX_REV_05 | 12 | 50.0 | -6,974 | 0.35 | 6,974 |
+| SENSEX_FALSE_11 | 13 | 38.5 | -7,267 | 0.42 | 9,517 |
+| SENSEX_BRK_06 | 13 | 30.8 | -8,582 | 0.44 | 11,929 |
+| SENSEX_DOJI_15 | 27 | 33.3 | -9,742 | 0.62 | 9,782 |
+| SENSEX_TRAP_02 | 16 | 31.2 | -13,471 | 0.19 | 15,556 |
+| SENSEX_EOD_20 | 24 | 25.0 | -16,458 | 0.21 | 16,458 |
+| SENSEX_WMA_13 | 66 | 39.4 | -17,950 | 0.50 | 17,950 |
+| SENSEX_MACD_17 | 34 | 26.5 | -19,487 | 0.31 | 22,876 |
+| SENSEX_TREND_04 | 17 | 0.0 | -20,007 | 0.00 | 20,007 |
+| SENSEX_IB_09 | 88 | 26.1 | -21,925 | 0.55 | 25,197 |
+
+## The 16 profitable strategies together (enabled on sensex-bot 2026-11-07)
+
+Solo net > 0: 03, 08, 10, 22, 24, 25, 26, 27, 34, 36, 42, 50, 52, 54, 56, 59. All other 44
+strategies are disabled.
+
+| Run | Trades | Win % | Gross ₹ | Charges ₹ | Net ₹ | PF | Max DD ₹ | Final balance ₹ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 profitable together | 488 | 50.4 | 90,951 | 53,293 | +37,659 | 1.04 | 213,678 | 67,659 |
+
+Per strategy inside that run: 27 +36,266 (10 trades), 25 +28,001 (85), 24 +23,130 (110),
+03 +20,429 (13), 22 +4,229, 34 +4,163, 59 +3,662, 26 +400, 36 0, 54 −260, 56 −2,710,
+50 −3,555, 52 −3,979, 42 −21,757 (12), 10 −50,360 (207).
+
+Monthly net: Nov +19.6k, Dec −14.9k, Jan +16.8k, Feb +33.0k, Mar +32.2k, Apr +38.8k,
+May −53.0k, Jun −43.2k, Jul −11.8k, Aug +12.6k, Sep −12.3k, Oct +1.6k, Nov (to 6th) +18.4k.
+
+Together the strategies compete for one position and three trades a day, so their
+combined result is not the sum of the solo results: SENSEX_SUP_10 (+64.9k alone) takes 207
+of the 488 slots and loses 50.4k in the combined run, and IB_EXT_42 (+109.7k alone) gets
+only 12 trades. Auto lots compound, which is why the drawdown is several times the
+starting ₹30,000.
+
