@@ -416,6 +416,9 @@ class Engine:
                 continue
             if sig is None:
                 continue
+            sig = strat.apply_tuning(ctx, sig)
+            if sig is None:
+                continue
             if not strat.regime_ok(ctx, sig.direction, strat.category):
                 log.info("%s %s blocked by regime %s", strat.sid, sig.direction, ctx.regime)
                 continue
@@ -499,7 +502,7 @@ class Engine:
             "target": sig.target, "book_fraction": sig.book_fraction, "booked": False,
             "prem_stop": hard_stop, "prem_target": fill.price * (1 + sig.prem_target_pct) if sig.prem_target_pct else None,
             "trail_level": None, "trail_active": False, "sl_order_id": None, "setup_key": sig.setup_key,
-            "time_exit": strat.time_exit.strftime("%H:%M"), "max_hold_min": strat.max_hold_min,
+            "time_exit": strat.time_exit.strftime("%H:%M"), "max_hold_min": int(strat.tune.get("max_hold", strat.max_hold_min)),
             "meta": sig.meta, "realized_gross": 0.0, "exit_value": 0.0, "exit_qty": 0, "exit_orders": 0,
             "last_ltp": fill.price, "delta": round(pick.delta, 2), "note": sig.note, "regime": ctx.regime,
             "entry_order_id": fill.order_id, "exit_legs": [],

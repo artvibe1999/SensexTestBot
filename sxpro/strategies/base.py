@@ -55,6 +55,7 @@ class Strategy:
     uses_3min: bool = False
     max_entries: int = 99                # entries per day (re-entry "yes, once" = 2)
     needs: tuple = ()                    # extra feeds in ctx.aux: vix, nifty, breadth, oi, first_min, daily
+    tune: dict = {}                      # backtest-derived adjustments, see apply_tuning / strategies/tuning.py
 
     # ---------------------------------------------------------------
     def in_window(self, ctx: MarketContext) -> bool:
@@ -95,6 +96,58 @@ class Strategy:
     def vol_ok(ctx: MarketContext) -> bool:
         """True when the volume proxy (SENSEX futures) is available."""
         return float(ctx.today["volume"].sum()) > 0
+
+    def apply_tuning(self, ctx: MarketContext, sig: Signal) -> Optional[Signal]:
+        """Apply this strategy's `tune` adjustments to a raw signal (None = filtered out).
+
+        Keys: side "CE"|"PE"; start/end "HH:MM" (entry window); trend15 True (15-min
+        9/21 EMA must agree with the direction); adx_min / adx_max (5-min ADX bounds);
+        min_stop_atr k (stop at least k x ATR(14) from entry); rr k (target = k x risk);
+        no_target True; book f (book fraction f at target, trail the rest);
+        prem_sl p (premium stop -p); max_hold minutes (applied by the engine).
+        """
+        t = self.tune
+        if not t:
+            return sig
+        c = ctx.last
+        price = float(c["close"])
+        if t.get("side") and sig.direction != t["side"]:
+            return None
+        ct = ctx.close_time
+        if t.get("start") and ct < time.fromisoformat(t["start"]):
+            return None
+        if t.get("end") and ct > time.fromisoformat(t["end"]):
+            return None
+        if t.get("adx_min") is not None and not (c["adx"] >= t["adx_min"]):
+            return None
+        if t.get("adx_max") is not None and not (c["adx"] <= t["adx_max"]):
+            return None
+        if t.get("trend15"):
+            l15 = ctx.df15.iloc[-1] if ctx.df15 is not None and len(ctx.df15) else None
+            if l15 is None or sign(sig.direction) * (l15["ema9"] - l15["ema21"]) <= 0:
+                return None
+        d = sign(sig.direction)
+        stop = sig.sl_price if sig.sl_price is not None else sig.sl_close
+        if t.get("min_stop_atr") and stop is not None and c["atr"] > 0:
+            want = price - d * t["min_stop_atr"] * float(c["atr"])
+            if d * (price - stop) < d * (price - want):
+                stop = want
+                if sig.sl_price is not None:
+                    sig.sl_price = stop
+                else:
+                    sig.sl_close = stop
+                    if "sl_close" in sig.meta:
+                        sig.meta["sl_close"] = stop
+        if t.get("no_target"):
+            sig.target = None
+        elif t.get("rr") and stop is not None and d * (price - stop) > 0:
+            sig.target = price + d * t["rr"] * abs(price - stop)
+        if t.get("book") is not None:
+            sig.book_fraction = float(t["book"])
+        if t.get("prem_sl") is not None:
+            sig.prem_sl_pct = float(t["prem_sl"])
+        sig.note = (sig.note + " | tuned").strip()
+        return sig
 
     def describe(self) -> str:
         return (f"{self.sid} – {self.name} [{self.category}] {self.start:%H:%M}-{self.end:%H:%M} "

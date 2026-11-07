@@ -332,14 +332,36 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
     return eng, store, kite, skips
 
 
+_DATA_CACHE: dict = {}
+
+
 def run_one(args: tuple) -> dict:
-    data_dir, enabled, capital, lots = args
-    data = Data(data_dir)
+    """args = (data_dir, enabled, capital, lots[, tune, period]).
+
+    enabled: one strategy id, a tuple of ids (combined run) or None (all);
+    tune: {sid: {...}} adjustments replacing strategies/tuning.py entries for this run;
+    period: (first_day, last_day) ISO dates to replay (indicators still use all history)."""
+    data_dir, enabled, capital, lots = args[:4]
+    tune = args[4] if len(args) > 4 else None
+    period = args[5] if len(args) > 5 else None
+    if data_dir not in _DATA_CACHE:
+        _DATA_CACHE.clear()
+        _DATA_CACHE[data_dir] = Data(data_dir)
+    data = _DATA_CACHE[data_dir]
+    from .strategies import ALL_STRATEGIES
+    from .strategies import tuning as tuning_mod
+    table = {**tuning_mod.TUNING, **(tune or {})}
+    for s in ALL_STRATEGIES:
+        s.tune = dict(table.get(s.sid, {}))
+    days = data.days
+    if period:
+        lo, hi = date.fromisoformat(period[0]), date.fromisoformat(period[1])
+        days = [d for d in days if lo <= d <= hi]
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         eng, store, kite, skips = _make_engine(data, enabled, capital, lots, tmp)
 
         async def go():
-            for day in data.days:
+            for day in days:
                 t = datetime.combine(day, time(9, 16, 5), tzinfo=IST)
                 end = datetime.combine(day, time(15, 30, 5), tzinfo=IST)
                 while t <= end:
@@ -351,7 +373,7 @@ def run_one(args: tuple) -> dict:
         label = enabled if isinstance(enabled, str) else f"ALL {len(enabled)} (bot rules)" if enabled else "ALL (bot rules)"
         return {"strategy": label, "trades": trades, "skips": skips,
                 "final_balance": eng.risk.paper_balance(), "capital": capital, "lots": lots,
-                "start": str(data.days[0]), "end": str(data.days[-1]), "sessions": len(data.days)}
+                "start": str(days[0]), "end": str(days[-1]), "sessions": len(days), "tune": tune or {}}
 
 
 # ============================================================ metrics
@@ -412,17 +434,23 @@ def main() -> None:
     r.add_argument("--strategies", default="all",
                    help="all | new (21-60) | old (1-20) | comma-separated IDs; one solo run each")
     r.add_argument("--combined", default="all", help="strategies enabled together in the 'ALL' run (same syntax)")
+    r.add_argument("--from", dest="date_from", default=None, help="first day to replay (YYYY-MM-DD)")
+    r.add_argument("--to", dest="date_to", default=None, help="last day to replay (YYYY-MM-DD)")
+    r.add_argument("--tuning", default=None, help="JSON file {sid: {...}} of adjustments for every run")
     a = ap.parse_args()
     if a.cmd == "fetch":
         fetch(a.days, a.out)
         return
     lots = a.lots if a.lots == "auto" else int(a.lots)
     solo, combo = pick(a.strategies), pick(a.combined)
-    jobs = [(a.data, tuple(combo), a.capital, lots)] + [(a.data, sid, a.capital, lots) for sid in solo]
+    tune = json.load(open(a.tuning, encoding="utf-8")) if a.tuning else None
+    period = (a.date_from or "1900-01-01", a.date_to or "2999-12-31") if (a.date_from or a.date_to) else None
+    jobs = [(a.data, tuple(combo), a.capital, lots, tune, period)] +         [(a.data, sid, a.capital, lots, tune, period) for sid in solo]
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
         results = list(ex.map(run_one, jobs))
     data = Data(a.data)
     out = {"period": {"start": results[0]["start"], "end": results[0]["end"], "sessions": results[0]["sessions"]},
+           "tuning": tune or {},
            "capital": a.capital, "lots": lots, "rvol_proxy_corr": data.rvol_proxy_check(),
            "summary": [metrics(x) for x in results], "trades": {x["strategy"]: x["trades"] for x in results}}
     with open(a.out, "w") as fh:

@@ -788,4 +788,8 @@ ALL_STRATEGIES: list[Strategy] = [
 from .catalog_21_60 import STRATEGIES_21_60  # noqa: E402  (strategies 21-60, lower priority than 1-20)
 
 ALL_STRATEGIES += STRATEGIES_21_60
+
+from . import tuning as _tuning  # noqa: E402
+
+_tuning.apply(ALL_STRATEGIES)
 STRATEGY_MAP = {s.sid: s for s in ALL_STRATEGIES}

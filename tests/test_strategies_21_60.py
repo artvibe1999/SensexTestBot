@@ -143,3 +143,46 @@ def test_backtest_breadth_ratio(tmp_path):
     adv, dec = (c5 > pc).sum(axis=1), (c5 < pc).sum(axis=1)
     ratio = adv / dec.clip(lower=1)
     assert list(ratio) == [2.0, 0.5]
+
+
+def _ctx_for_tuning():
+    df = synthetic_candles(4, seed=5, drift=0.0004)
+    day = sorted(set(df.index.date))[-1]
+    part = df[df.index.date <= day].iloc[:-20]
+    return build_context(part, part.index[-1].to_pydatetime() + timedelta(minutes=5),
+                         {"open": 1, "high": 2, "low": 0.5, "close": 1}, 20.0, day)
+
+
+def test_apply_tuning_filters_and_reshapes():
+    ctx = _ctx_for_tuning()
+    c = float(ctx.last["close"]); atr = float(ctx.last["atr"])
+    s = Spec()
+    s.tune = {"side": "PE"}
+    assert s.apply_tuning(ctx, Signal(CE, sl_price=c - 5)) is None
+    s.tune = {"min_stop_atr": 1.0, "rr": 2.0, "book": 0.5}
+    sig = s.apply_tuning(ctx, Signal(CE, sl_price=c - 5, target=c + 5))
+    assert sig.sl_price == pytest.approx(c - atr)                 # widened to 1 ATR
+    assert sig.target == pytest.approx(c + 2 * atr)               # 1:2 on the new risk
+    assert sig.book_fraction == 0.5 and sig.note.endswith("tuned")
+    sig = s.apply_tuning(ctx, Signal(CE, sl_price=c - 3 * atr))   # already wider: unchanged stop
+    assert sig.sl_price == pytest.approx(c - 3 * atr)
+    s.tune = {"no_target": True}
+    assert s.apply_tuning(ctx, Signal(PE, sl_price=c + 50, target=c - 50)).target is None
+    s.tune = {"adx_min": 1000}
+    assert s.apply_tuning(ctx, Signal(CE, sl_price=c - 5)) is None
+    s.tune = {"start": "15:29"}
+    assert s.apply_tuning(ctx, Signal(CE, sl_price=c - 5)) is None
+    s.tune = {"min_stop_atr": 1.0}
+    sig = s.apply_tuning(ctx, Signal(PE, sl_close=c + 1, meta={"sl_close": c + 1}))
+    assert sig.sl_close == pytest.approx(c + atr) and sig.meta["sl_close"] == pytest.approx(c + atr)
+
+
+def test_tuning_registry_env_override(monkeypatch):
+    from sxpro.strategies import tuning
+    monkeypatch.setenv("SXPRO_TUNING", '{"SENSEX_DIB_44": {"trend15": true}}')
+    class S:  # minimal stand-in
+        sid = "SENSEX_DIB_44"
+        tune = {}
+    s = S()
+    tuning.apply([s])
+    assert s.tune == {"trend15": True}
