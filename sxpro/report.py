@@ -1,19 +1,14 @@
 """16:00 IST reconciliation: fetch the day's live (Kite) and paper trades, compute the
-correct P&L after Zerodha's charges and taxes, update the GCS HTML report, and log the
-final trades to the Google Sheet."""
+correct P&L after Zerodha's charges and taxes, and log the final trades to the Google
+Sheet."""
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import urllib.parse
-import uuid
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
-
-import requests
 
 from .charges import OrderLeg, formula_charges, order_charges
 from .config import IST, Config
@@ -23,44 +18,6 @@ from .sheets import SheetLogger
 from .store import Store
 
 log = logging.getLogger(__name__)
-
-META_TOKEN = "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
-DATA_RE = re.compile(r"const D=(\{.*?\});\nconst inr", re.S)
-TEMPLATE = os.path.join(os.path.dirname(__file__), "report_template.html")
-
-
-# ------------------------------------------------------------------ GCS
-class GCS:
-    def __init__(self, bucket: str):
-        self.bucket = bucket
-
-    @staticmethod
-    def _token() -> str:
-        r = requests.get(META_TOKEN, headers={"Metadata-Flavor": "Google"}, timeout=5)
-        r.raise_for_status()
-        return r.json()["access_token"]
-
-    def get(self, name: str) -> str | None:
-        url = (f"https://storage.googleapis.com/storage/v1/b/{self.bucket}/o/"
-               f"{urllib.parse.quote(name, safe='')}?alt=media")
-        r = requests.get(url, headers={"Authorization": f"Bearer {self._token()}"}, timeout=30)
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        return r.content.decode("utf-8")
-
-    def put(self, name: str, body: str, content_type: str = "text/html; charset=utf-8") -> None:
-        boundary = uuid.uuid4().hex
-        meta = json.dumps({"name": name, "contentType": content_type, "cacheControl": "no-cache, max-age=0"})
-        payload = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n"
-                   f"--{boundary}\r\nContent-Type: {content_type}\r\n\r\n").encode() + body.encode("utf-8") + \
-                  f"\r\n--{boundary}--".encode()
-        r = requests.post(f"https://storage.googleapis.com/upload/storage/v1/b/{self.bucket}/o?uploadType=multipart",
-                          headers={"Authorization": f"Bearer {self._token()}",
-                                   "Content-Type": f"multipart/related; boundary={boundary}"},
-                          data=payload, timeout=60)
-        r.raise_for_status()
-
 
 def _hhmm(v: Any) -> str:
     if isinstance(v, datetime):
@@ -77,14 +34,6 @@ def _is_sensex_option(sym: str) -> bool:
 class DailyReporter:
     def __init__(self, cfg: Config, kite: KiteService, store: Store, risk: RiskManager, sheet: SheetLogger):
         self.cfg, self.kite, self.store, self.risk, self.sheet = cfg, kite, store, risk, sheet
-
-    @property
-    def object_name(self) -> str:
-        return f"r/{self.cfg.report_token}/index.html"
-
-    @property
-    def public_url(self) -> str:
-        return f"https://storage.googleapis.com/{self.cfg.report_bucket}/{self.object_name}"
 
     # ------------------------------------------------------------ live
     def live_rows(self, day: date) -> list[dict]:
@@ -177,29 +126,7 @@ class DailyReporter:
             self.store.set("paper_balance", round(self.risk.paper_balance() + delta, 2))
         return rows
 
-    # ------------------------------------------------------------ report + sheet
-    def _merge(self, html: str | None, day: date, live: list[dict] | None, paper: list[dict]) -> str:
-        if html and DATA_RE.search(html):
-            data = json.loads(DATA_RE.search(html).group(1))
-            page = html
-        else:
-            page = open(TEMPLATE, encoding="utf-8").read()
-            data = {"since": day.isoformat(), "paper": {"trades": [], "days": []},
-                    "live": {"trades": [], "days": []}, "backtest_url": ""}
-        d = day.isoformat()
-        for kind, rows in (("paper", paper), ("live", live)):
-            if rows is None:  # live unavailable (Kite logged out): keep what was there
-                continue
-            sec = data.setdefault(kind, {"trades": [], "days": []})
-            sec["trades"] = [r for r in sec.get("trades", []) if r.get("date") != d] + rows
-            sec["days"] = sorted(set(sec.get("days", [])) | {d})
-        data["generated_at"] = datetime.now(IST).isoformat(timespec="seconds")
-        blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-        if "__DATA__" in page:
-            return page.replace("__DATA__", blob)
-        m = DATA_RE.search(page)
-        return page[: m.start(1)] + blob + page[m.end(1):]
-
+    # ------------------------------------------------------------ sheet
     def _sheet_trades(self, live: list[dict] | None, paper: list[dict]) -> None:
         """Append final trades to the sheet's Trades tab, each one only once per day."""
         day = (paper or live or [{}])[0].get("date")
@@ -230,12 +157,6 @@ class DailyReporter:
     def run(self, day: date) -> str:
         live = self.live_rows(day) if self.kite.ready else None
         paper = self.paper_rows(day)
-        url = ""
-        if self.cfg.report_bucket and self.cfg.report_token:
-            gcs = GCS(self.cfg.report_bucket)
-            html = gcs.get(self.object_name)
-            gcs.put(self.object_name, self._merge(html, day, live, paper))
-            url = self.public_url
         self._sheet_trades(live, paper)
         lines = [f"🧾 Reconciled report {day:%d %b %Y} (after Zerodha charges & taxes)"]
         p_net = sum(r["net"] for r in paper)
@@ -250,6 +171,4 @@ class DailyReporter:
             if any(r["open_qty"] for r in live):
                 lines.append("⚠️ Some live quantity is still open (marked at last price).")
         lines.append(f"Paper balance: ₹{self.risk.paper_balance():,.2f}")
-        if url:
-            lines.append(f"Report: {url}")
         return "\n".join(lines)

@@ -1,14 +1,21 @@
-"""Google Sheet logging through the sheet's Apps Script web app (SHEETS_WEBHOOK_URL).
+"""Google Sheet logging, either with a service-account key through the Sheets API
+(GOOGLE_SHEET_ID + GOOGLE_SERVICE_ACCOUNT_JSON) or through the sheet's Apps Script web
+app (SHEETS_WEBHOOK_URL + SHEETS_SECRET). The service account wins when both are set.
 
 Rows are queued in memory and flushed in batches every few seconds, so trading never
-waits on Google. Tabs: Orders, Log, Trades, Status. A failed batch is retried with the
-same id; the Apps Script de-duplicates on that id.
+waits on Google. Tabs: Orders, Log, Trades, Status (created, with a header row, when
+missing). A failed batch is retried; the Apps Script de-duplicates on the batch id, the
+Sheets API path does not, so a batch whose reply was lost can appear twice.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import threading
+import time
+import urllib.parse
 import uuid
 from datetime import datetime
 
@@ -30,18 +37,96 @@ HEADERS = {
 MAX_QUEUED = 5000
 
 
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+class SheetsAPI:
+    """Minimal Google Sheets API v4 client authenticated with a service-account key."""
+
+    SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+    BASE = "https://sheets.googleapis.com/v4/spreadsheets/"
+
+    def __init__(self, sheet_id: str, sa_json: str):
+        info = json.loads(sa_json)
+        self.sheet_id = sheet_id
+        self.email = info["client_email"]
+        self.token_uri = info.get("token_uri") or "https://oauth2.googleapis.com/token"
+        self._key_pem = info["private_key"].encode()
+        self._key_id = info.get("private_key_id", "")
+        self._token, self._token_exp = "", 0.0
+        self._ready_tabs: set[str] = set()
+
+    def _access_token(self) -> str:
+        if self._token and time.time() < self._token_exp - 120:
+            return self._token
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        now = int(time.time())
+        header = {"alg": "RS256", "typ": "JWT", "kid": self._key_id}
+        claims = {"iss": self.email, "scope": self.SCOPE, "aud": self.token_uri, "iat": now, "exp": now + 3600}
+        signing_input = f"{_b64url(json.dumps(header).encode())}.{_b64url(json.dumps(claims).encode())}"
+        key = serialization.load_pem_private_key(self._key_pem, password=None)
+        sig = key.sign(signing_input.encode(), padding.PKCS1v15(), hashes.SHA256())
+        r = requests.post(self.token_uri, timeout=30, data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": f"{signing_input}.{_b64url(sig)}"})
+        if r.status_code != 200:
+            raise RuntimeError(f"token: HTTP {r.status_code} {r.text[:200]}")
+        body = r.json()
+        self._token, self._token_exp = body["access_token"], time.time() + float(body.get("expires_in", 3600))
+        return self._token
+
+    def _call(self, method: str, path: str, **kw) -> dict:
+        r = requests.request(method, self.BASE + self.sheet_id + path, timeout=60,
+                             headers={"Authorization": f"Bearer {self._access_token()}"}, **kw)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code} {r.text[:200]}")
+        return r.json()
+
+    @staticmethod
+    def _range(tab: str, cells: str) -> str:
+        return urllib.parse.quote(f"'{tab}'!{cells}", safe="")
+
+    def _ensure_tab(self, tab: str, header: list[str]) -> None:
+        if tab in self._ready_tabs:
+            return
+        meta = self._call("GET", "", params={"fields": "sheets.properties.title"})
+        if tab not in {s["properties"]["title"] for s in meta.get("sheets", [])}:
+            self._call("POST", ":batchUpdate", json={"requests": [{"addSheet": {"properties": {"title": tab}}}]})
+        if not self._call("GET", "/values/" + self._range(tab, "A1:A1")).get("values"):
+            self._call("PUT", "/values/" + self._range(tab, "A1"), params={"valueInputOption": "RAW"},
+                       json={"values": [header]})
+        self._ready_tabs.add(tab)
+
+    def append(self, tab: str, header: list[str], rows: list[list]) -> None:
+        self._ensure_tab(tab, header)
+        self._call("POST", "/values/" + self._range(tab, "A1") + ":append",
+                   params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
+                   json={"values": rows})
+
+
 def ts(dt: datetime | None = None) -> str:
     return (dt or datetime.now(IST)).astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class SheetLogger:
-    def __init__(self, url: str, secret: str):
+    def __init__(self, url: str, secret: str, sheet_id: str = "", sa_json: str = ""):
         self.url, self.secret = url, secret
-        self.enabled = bool(url and secret)
+        self.last_error = ""
+        self.api: SheetsAPI | None = None
+        if sheet_id and sa_json:
+            try:
+                self.api = SheetsAPI(sheet_id, sa_json)
+            except Exception as exc:
+                self.last_error = f"service account: {exc}"
+                log.error("Google service account unusable: %s", exc)
+        self.backend = "service_account" if self.api else "webhook" if url and secret else ""
+        self.enabled = bool(self.backend)
         self._lock = threading.Lock()
         self._queue: dict[str, list[list]] = {t: [] for t in HEADERS}
         self._pending: dict[str, tuple[str, list[list]]] = {}  # tab -> (batch id, rows) awaiting ack
-        self.last_error = ""
 
     # ---------------- producers (thread-safe, never raise) ----------------
     def add(self, tab: str, row: list) -> None:
@@ -68,11 +153,15 @@ class SheetLogger:
 
     def stats(self) -> dict:
         with self._lock:
-            return {"enabled": self.enabled, "queued": {t: len(q) for t, q in self._queue.items() if q},
+            return {"enabled": self.enabled, "backend": self.backend, "queued": {t: len(q) for t, q in self._queue.items() if q},
                     "pending": {t: len(p[1]) for t, p in self._pending.items()}, "last_error": self.last_error}
 
     # ---------------- flusher ----------------
     def _post(self, tab: str, batch_id: str, rows: list[list]) -> bool:
+        if self.api:
+            self.api.append(tab, HEADERS[tab], rows)
+            self.last_error = ""
+            return True
         body = {"secret": self.secret, "id": batch_id, "tab": tab, "header": HEADERS[tab], "rows": rows}
         r = requests.post(self.url, json=body, timeout=60)
         ok = r.status_code == 200 and r.text.strip() == "ok"

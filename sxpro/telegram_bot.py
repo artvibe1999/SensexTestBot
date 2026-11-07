@@ -24,7 +24,7 @@ Status
 /pnl – daily summary
 /regime – current market regime
 /funds – live Zerodha funds
-/report – run the reconciliation report now (Zerodha charges, GCS report, sheet)
+/report – run the reconciliation report now (Zerodha charges, sheet)
 
 Control
 /mode paper | /mode live – switch trading mode (live asks /confirmlive)

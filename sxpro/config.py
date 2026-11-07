@@ -99,11 +99,11 @@ class Config:
     order_fill_timeout_s: float = field(default_factory=lambda: _float("ORDER_FILL_TIMEOUT_S", 8))
     limit_buffer_pct: float = field(default_factory=lambda: _float("LIMIT_BUFFER_PCT", 0.01))
 
-    # Google Sheet (Apps Script web app) + daily GCS report
+    # Google Sheet: service-account key (Sheets API), or the sheet's Apps Script web app
+    google_sheet_id: str = field(default_factory=lambda: _env("GOOGLE_SHEET_ID"))
+    google_sa_json: str = field(default_factory=lambda: _env("GOOGLE_SERVICE_ACCOUNT_JSON"))
     sheets_webhook_url: str = field(default_factory=lambda: _env("SHEETS_WEBHOOK_URL"))
     sheets_secret: str = field(default_factory=lambda: _env("SHEETS_SECRET"))
-    report_bucket: str = field(default_factory=lambda: _env("REPORT_GCS_BUCKET"))
-    report_token: str = field(default_factory=lambda: _env("REPORT_TOKEN"))
     report_time: time = field(default_factory=lambda: _hhmm(_env("REPORT_TIME"), "16:00"))
     status_interval_min: int = field(default_factory=lambda: _int("STATUS_INTERVAL_MIN", 15))
 

@@ -267,16 +267,6 @@ def test_paper_rows_recompute_and_merge(cfg):
     assert rep.risk.paper_balance() == pytest.approx(40000 + 1200 - exp, abs=0.02)
     rep.paper_rows(day)  # idempotent
     assert rep.risk.paper_balance() == pytest.approx(40000 + 1200 - exp, abs=0.02)
-    # merge into an existing report: older days kept, today's rows replaced, template preserved
-    old = open("sxpro/report_template.html", encoding="utf-8").read().replace("__DATA__", json.dumps(
-        {"since": "2026-11-02", "paper": {"trades": [{"date": "2026-11-04", "net": 1}], "days": ["2026-11-03"]},
-         "live": {"trades": [{"date": "2026-11-03", "net": 5}], "days": ["2026-11-03"]}, "backtest_url": "x"}))
-    html = rep._merge(old, day, None, rows)
-    from sxpro.report import DATA_RE
-    d = json.loads(DATA_RE.search(html).group(1))
-    assert d["paper"]["trades"] == rows and d["paper"]["days"] == ["2026-11-03", "2026-11-04"]
-    assert d["live"]["trades"] == [{"date": "2026-11-03", "net": 5}] and d["backtest_url"] == "x"
-    assert "SENSEX bot trading report" in html
 
 
 def test_sheet_trades_logged_once(cfg):

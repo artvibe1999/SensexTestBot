@@ -59,11 +59,15 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
 * **Lot size** comes from the instrument master (currently 20 for SENSEX), so the
   maximum affordable premium is `available margin × 90% ÷ lot size`.
 
-## Google Sheet, daily report and VM schedule
+## Google Sheet and daily reconciliation
 
-* **Google Sheet ("Trading log"):** rows go through the sheet's Apps Script web app
-  (`SHEETS_WEBHOOK_URL` and `SHEETS_SECRET`). Rows are batched every 5 seconds and
-  retried until the script confirms them.
+* **Google Sheet:** rows are written with a Google service-account key through the
+  Sheets API (`GOOGLE_SHEET_ID`, plus the key's JSON on one line in
+  `GOOGLE_SERVICE_ACCOUNT_JSON`; share the sheet with the key's `client_email` as an
+  Editor). An Apps Script web app (`SHEETS_WEBHOOK_URL` and `SHEETS_SECRET`) still works
+  when no service account is set. Missing tabs are created with a header row. Rows are
+  batched every 5 seconds and retried until Google accepts them; `/health` shows the
+  backend and queue.
   * `Orders`: every paper and live entry, partial exit, exit and exchange SL order.
   * `Log`: every Telegram notification, plus WARNING and ERROR log lines.
   * `Status`: startup, Kite login, mode, lots, capital and strategy changes, a heartbeat
@@ -80,12 +84,8 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
      stamp duty and GST. If that API fails, the same published rates are applied by
      formula (`sxpro/charges.py`).
   4. **Corrections:** stored trades, and the paper balance, are corrected to these numbers.
-  5. **Publishing:** the `gs://$REPORT_GCS_BUCKET/r/$REPORT_TOKEN/index.html` report
-     gets today's rows (earlier days are kept). The final trades go to the sheet's
-     `Trades` tab, and a summary goes to Telegram.
-* **VM schedule:** the resource policy `sxbot-start-stop` starts the VM at 08:30 and
-  stops it at 16:30 IST, Monday–Friday. Docker and the containers restart on boot. The
-  bot asks for the daily Kite login at 08:30 and finishes the report before the VM stops.
+  5. **Publishing:** the final trades go to the sheet's `Trades` tab, and a summary
+     goes to Telegram. (No cloud-storage HTML report in this deployment.)
 
 ## Telegram commands
 

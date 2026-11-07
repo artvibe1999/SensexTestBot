@@ -241,7 +241,7 @@ class HistKite:
 def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdir: str):
     os.environ["DATA_DIR"] = tmpdir
     os.environ["PAPER_CAPITAL"] = str(capital)
-    for k in ("SHEETS_WEBHOOK_URL", "SHEETS_SECRET", "REPORT_GCS_BUCKET"):
+    for k in ("SHEETS_WEBHOOK_URL", "SHEETS_SECRET", "GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON"):
         os.environ.pop(k, None)
     from .engine import Engine
     from .store import Store

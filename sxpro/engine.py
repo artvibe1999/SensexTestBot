@@ -59,7 +59,8 @@ class Engine:
         self._last_stop_check = datetime.min.replace(tzinfo=IST)
         self._last_3m: Optional[datetime] = None
         self.last_error: str = ""
-        self.sheet = SheetLogger(cfg.sheets_webhook_url, cfg.sheets_secret)
+        self.sheet = SheetLogger(cfg.sheets_webhook_url, cfg.sheets_secret,
+                                 cfg.google_sheet_id, cfg.google_sa_json)
         self.reporter = DailyReporter(cfg, kite, store, self.risk, self.sheet)
         self._last_status: Optional[datetime] = None
         self._report_retry_at: Optional[datetime] = None
