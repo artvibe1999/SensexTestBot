@@ -53,6 +53,8 @@ class Strategy:
     reentry: str = "no"                  # "no" | "setup" (new setup only) | "yes"
     trail_kind: str = "close"            # "close" | "price" | "none"
     uses_3min: bool = False
+    max_entries: int = 99                # entries per day (re-entry "yes, once" = 2)
+    needs: tuple = ()                    # extra feeds in ctx.aux: vix, nifty, breadth, oi, first_min, daily
 
     # ---------------------------------------------------------------
     def in_window(self, ctx: MarketContext) -> bool:

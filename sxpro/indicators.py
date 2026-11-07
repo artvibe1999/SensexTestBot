@@ -81,6 +81,36 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
     return vwap.fillna(fallback)
 
 
+def session_vwap_sd(df: pd.DataFrame, vwap: pd.Series) -> pd.Series:
+    """Volume-weighted standard deviation of typical price around the session VWAP
+    (unweighted when the session has no volume)."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    day = df.index.date
+    vol = df["volume"].astype(float)
+    cv = vol.groupby(day).cumsum()
+    m2 = (tp * tp * vol).groupby(day).cumsum() / cv.replace(0, np.nan)
+    var = m2 - vwap * vwap
+    fallback = tp.groupby(day).expanding().std(ddof=0).reset_index(level=0, drop=True)
+    return np.sqrt(var.clip(lower=0)).fillna(fallback).fillna(0.0)
+
+
+def ttm_momentum(df: pd.DataFrame, n: int = 20) -> pd.Series:
+    """TTM Squeeze momentum: linear-regression value (at the last bar) of
+    close - mean(mean(highest high, lowest low), SMA) over `n` bars."""
+    hh = df["high"].rolling(n, min_periods=n).max()
+    ll = df["low"].rolling(n, min_periods=n).min()
+    y = df["close"] - ((hh + ll) / 2 + sma(df["close"], n)) / 2
+    x = np.arange(n, dtype=float)
+    xm, xv = x.mean(), ((x - x.mean()) ** 2).sum()
+
+    def endpoint(w: np.ndarray) -> float:
+        if np.isnan(w).any():
+            return np.nan
+        b = ((x - xm) * (w - w.mean())).sum() / xv
+        return w.mean() + b * (n - 1 - xm)
+    return y.rolling(n, min_periods=n).apply(endpoint, raw=True)
+
+
 def supertrend(df: pd.DataFrame, n: int = 10, mult: float = 3.0) -> pd.DataFrame:
     a = atr(df, n).to_numpy()
     hl2 = ((df["high"] + df["low"]) / 2).to_numpy()
@@ -158,15 +188,23 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     c = out["close"]
     out["ema9"] = ema(c, 9)
     out["ema21"] = ema(c, 21)
+    out["ema5"] = ema(c, 5)
+    out["ema8"] = ema(c, 8)
+    out["ema13"] = ema(c, 13)
+    out["ema50"] = ema(c, 50)
     out["wma5"] = wma(c, 5)
     out["wma13"] = wma(c, 13)
     out["sma20"] = sma(c, 20)
     out["vwap"] = session_vwap(out)
+    out["vwap_sd"] = session_vwap_sd(out, out["vwap"])
     out["atr"] = atr(out, 14)
+    out["atr_sma10"] = sma(out["atr"], 10)
     out["rsi"] = rsi(c, 14)
     out = out.join(adx(out, 14))
     out = out.join(bollinger(c, 20, 2.0))
     out = out.join(keltner(out, 20, 1.5))
+    out["squeeze_on"] = (out["bb_upper"] < out["kc_upper"]) & (out["bb_lower"] > out["kc_lower"])
+    out["ttm_mom"] = ttm_momentum(out, 20)
     out = out.join(supertrend(out, 10, 3.0))
     out["psar"] = psar(out)
     out = out.join(macd(c))

@@ -1,7 +1,7 @@
 # SENSEX PRO – paper/live options trading bot
 
 Single-leg SENSEX weekly options bot for Zerodha Kite Connect, implementing the
-framework and 20 strategies in [`docs/`](docs/). It's controlled from Telegram and
+framework and 60 strategies in [`docs/`](docs/). It's controlled from Telegram and
 runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login callback.
 
 ## What it does
@@ -12,9 +12,15 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
 * **Regime engine** (framework §2): BULLISH / BEARISH / SIDEWAYS / NEUTRAL, computed on
   5-min and confirmed on 15-min. Bullish disables PUTs, bearish disables CALLs, and
   sideways disables breakout strategies.
-* **20 strategies** (`sxpro/strategies/catalog.py`): evaluated on every closed 5-min
-  candle, each within its own time window. If several strategies signal on the same
-  candle, the first one in catalogue order wins.
+* **60 strategies**: 1–20 in `sxpro/strategies/catalog.py`, 21–60 in
+  `sxpro/strategies/catalog_21_60.py` (specs: `docs/sensex_pro_additional_strategies_*.md`).
+  They are evaluated on every closed 5-min candle, each within its own time window. If
+  several strategies signal on the same candle, the first one in catalogue order wins
+  (so 1–20 take priority over 21–60).
+* **Extra feeds for 21–60**, fetched only while a strategy that needs them is enabled:
+  India VIX (27, 29), NIFTY 50 (60), advance/decline breadth of 15 SENSEX heavyweights
+  (37, built from one quote per candle), option-chain OI (39, 48), the 09:15 1-minute
+  candle (34) and recent daily candles (50, 59).
 * **Strike selection** (framework §5):
   * Expiry follows each strategy's rule. On expiry day the bot rolls to next week,
     except SENSEX_0DTE_12, which trades the same-day expiry.
@@ -143,4 +149,4 @@ pip install -r requirements.txt pytest && pytest -q
 docker compose exec bot python -m sxpro.replay --days 30   # signal sanity check on real data
 ```
 
-> ⚠️ None of these strategies has been backtested for P&L. Paper trade before going live.
+> ⚠️ Backtest of strategies 21–60 (and the 1–20 baseline): [`docs/backtest_21_60.md`](docs/backtest_21_60.md). Option prices there are modelled, not real fills. Paper trade before going live.

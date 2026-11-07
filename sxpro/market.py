@@ -24,6 +24,12 @@ class MarketContext:
     df15: Optional[pd.DataFrame] = None
     regime: str = NEUTRAL
     regime_detail: dict = field(default_factory=dict)
+    # Optional extra feeds, filled only when an enabled strategy declares `needs`:
+    # vix (Series, today's 5m India VIX), nifty (DataFrame, today's 5m NIFTY 50 OHLC),
+    # breadth (Series, today's advance/decline ratio of the SENSEX heavyweights per 5m
+    # candle), oi ({"expiry", "CE": {strike: oi}, "PE": {...}}), first_min (Series, the
+    # 09:15 1-minute candle), daily (DataFrame of recent daily candles before today).
+    aux: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.today_date = self.df.index[-1].date()
@@ -204,10 +210,10 @@ def classify_regime(ctx: MarketContext, vwap_slope_bps_min: float = 2.0) -> tupl
 
 
 def build_context(df5: pd.DataFrame, now: datetime, prev_day: dict, daily_adx: float = float("nan"),
-                  nearest_expiry: Optional[date] = None) -> MarketContext:
+                  nearest_expiry: Optional[date] = None, aux: Optional[dict] = None) -> MarketContext:
     enriched = ind.enrich(df5)
     df15 = ind.enrich(resample_15(df5)) if len(df5) >= 45 else None
     ctx = MarketContext(df=enriched, now=now, prev_day=prev_day, daily_adx=daily_adx,
-                        nearest_expiry=nearest_expiry, df15=df15)
+                        nearest_expiry=nearest_expiry, df15=df15, aux=aux or {})
     ctx.regime, ctx.regime_detail = classify_regime(ctx)
     return ctx

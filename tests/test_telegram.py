@@ -4,7 +4,7 @@ from sxpro.telegram_bot import HELP, MENU, ids_text
 
 def test_ids_lists_every_strategy_with_state():
     text = ids_text({"SENSEX_IB_09", "SENSEX_TREND_04"})
-    assert "18/20 enabled" in text
+    assert f"{len(ALL_STRATEGIES) - 2}/{len(ALL_STRATEGIES)} enabled" in text
     for s in ALL_STRATEGIES:
         assert s.sid in text
     assert "⛔ SENSEX_IB_09" in text and "✅ SENSEX_VWAP_03" in text

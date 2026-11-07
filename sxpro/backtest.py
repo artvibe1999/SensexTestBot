@@ -6,7 +6,7 @@
 What is real vs modelled
 * SENSEX 1-minute candles (Kite) drive LTP-based stops/targets; 5-minute candles are
   resampled from them, exactly as the live bot sees closed 5-minute candles.
-* The regime engine, all 20 strategies, strike selection, sizing, risk limits, exits,
+* The regime engine, all strategies (1-60), strike selection, sizing, risk limits, exits,
   partial booking, trailing and charges are the production code paths (Engine).
 * Option premiums are modelled: Kite has no history for expired option contracts, so
   each strike is priced with Black-Scholes using India VIX as IV (flat smile), with a
@@ -15,6 +15,10 @@ What is real vs modelled
   intraday futures series, so the volume proxy is the 5-minute traded value of the
   largest SENSEX constituents (RVOL is a ratio, so only the shape matters).
 * Weekly SENSEX expiry = Thursday (previous trading day if Thursday is a holiday).
+* Extra feeds for strategies 21-60 (optional files): India VIX 5m, NIFTY 50 5m
+  (nifty5.csv.gz), advance/decline breadth of the SENSEX heavyweights from their 5m closes
+  vs previous daily close (const5/constD.csv.gz), the 09:15 1-minute candle and recent
+  daily candles. Option OI has no history, so OI strategies (39, 48) cannot trade here.
 """
 from __future__ import annotations
 
@@ -132,6 +136,45 @@ class Data:
         dd = self.daily.copy()
         self.daily_adx = ind.adx(dd, 14)["adx"]
         self.expiries = self._expiries()
+        opt = lambda f: rd(f) if os.path.exists(os.path.join(d, f)) else None
+        n = opt("nifty5.csv.gz")
+        self.nifty = n.tz_convert(IST) if n is not None and n.index.tz else n
+        self.breadth = None
+        c5, cd = opt("const5.csv.gz"), opt("constD.csv.gz")
+        if c5 is not None and cd is not None:
+            c5 = c5.tz_convert(IST) if c5.index.tz else c5
+            cd = cd.tz_convert(IST) if cd.index.tz else cd
+            cd.index = pd.Index([ts.date() for ts in cd.index])
+            prev_close = cd.shift(1)
+            pc = prev_close.reindex([ts.date() for ts in c5.index])
+            pc.index = c5.index
+            adv = (c5 > pc).sum(axis=1)
+            dec = (c5 < pc).sum(axis=1)
+            self.breadth = (adv / dec.clip(lower=1)).where(pc.notna().any(axis=1))
+        self.first_min = self.idx1[self.idx1.index.time == time(9, 15)]
+        self.first_min.index = pd.Index([ts.date() for ts in self.first_min.index])
+
+    def aux(self, needs: set, today: date, last_bar: pd.Timestamp, now: datetime) -> dict:
+        """Extra feeds visible at `now` (bars up to the last closed 5m candle)."""
+        out: dict = {}
+
+        def day_part(s):
+            if s is None:
+                return None
+            part = s[(s.index.date == today) & (s.index <= last_bar)]
+            return part if len(part) else None
+        if "vix" in needs:
+            out["vix"] = day_part(self.vix)
+        if "nifty" in needs:
+            out["nifty"] = day_part(self.nifty)
+        if "breadth" in needs:
+            b = day_part(self.breadth)
+            out["breadth"] = b.dropna() if b is not None else None
+        if "first_min" in needs and today in self.first_min.index:
+            out["first_min"] = self.first_min.loc[today]
+        if "daily" in needs:
+            out["daily"] = self.daily[self.daily.index.date < today].tail(30)
+        return out
 
     def _expiries(self) -> list[date]:
         trading = set(self.days)
@@ -265,8 +308,10 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
             p = prev.iloc[-1]
             adx_v = float(data.daily_adx.loc[prev.index[-1]]) if len(prev) > 20 else float("nan")
             exps = kite.expiries()
+            needs = self._needs()
+            aux = data.aux(needs, now.date(), df.index[-1], now) if needs else {}
             ctx = MarketContext(df=df, now=now, prev_day={"open": p.open, "high": p.high, "low": p.low, "close": p.close},
-                                daily_adx=adx_v, nearest_expiry=exps[0] if exps else None, df15=df15)
+                                daily_adx=adx_v, nearest_expiry=exps[0] if exps else None, df15=df15, aux=aux)
             ctx.regime, ctx.regime_detail = classify_regime(ctx)
             return ctx
 
@@ -275,7 +320,8 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
     store.set("lots_paper", lots)
     store.set("mode", "paper")
     if enabled:
-        store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid != enabled])
+        keep = {enabled} if isinstance(enabled, str) else set(enabled)
+        store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid not in keep])
     skips: dict[str, int] = {}
 
     async def notify(text: str):
@@ -302,7 +348,8 @@ def run_one(args: tuple) -> dict:
                     t += timedelta(minutes=1)
         asyncio.run(go())
         trades = store.trades("paper")
-        return {"strategy": enabled or "ALL (bot rules)", "trades": trades, "skips": skips,
+        label = enabled if isinstance(enabled, str) else f"ALL {len(enabled)} (bot rules)" if enabled else "ALL (bot rules)"
+        return {"strategy": label, "trades": trades, "skips": skips,
                 "final_balance": eng.risk.paper_balance(), "capital": capital, "lots": lots,
                 "start": str(data.days[0]), "end": str(data.days[-1]), "sessions": len(data.days)}
 
@@ -336,6 +383,20 @@ def metrics(res: dict) -> dict:
     }
 
 
+def pick(spec: str) -> list[str]:
+    from .strategies import ALL_STRATEGIES
+    sids = [s.sid for s in ALL_STRATEGIES]
+    out: set[str] = set()
+    for w in (x.strip() for x in spec.split(",") if x.strip()):
+        if w == "all":
+            out |= set(sids)
+        elif w in ("old", "new"):
+            out |= set(sids[:20] if w == "old" else sids[20:])
+        else:
+            out |= {s for s in sids if s == w or s.endswith("_" + w) or w in s}
+    return [s for s in sids if s in out]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -348,13 +409,16 @@ def main() -> None:
     r.add_argument("--capital", type=float, default=40000)
     r.add_argument("--lots", default="2")
     r.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    r.add_argument("--strategies", default="all",
+                   help="all | new (21-60) | old (1-20) | comma-separated IDs; one solo run each")
+    r.add_argument("--combined", default="all", help="strategies enabled together in the 'ALL' run (same syntax)")
     a = ap.parse_args()
     if a.cmd == "fetch":
         fetch(a.days, a.out)
         return
-    from .strategies import ALL_STRATEGIES
     lots = a.lots if a.lots == "auto" else int(a.lots)
-    jobs = [(a.data, None, a.capital, lots)] + [(a.data, s.sid, a.capital, lots) for s in ALL_STRATEGIES]
+    solo, combo = pick(a.strategies), pick(a.combined)
+    jobs = [(a.data, tuple(combo), a.capital, lots)] + [(a.data, sid, a.capital, lots) for sid in solo]
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
         results = list(ex.map(run_one, jobs))
     data = Data(a.data)

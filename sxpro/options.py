@@ -72,6 +72,7 @@ def choose_expiry(expiries: list[date], today: date, rule: str, now_t: time) -> 
     - "weekly":     current weekly expiry; on expiry day (0DTE) roll to next week (framework sec. 5)
     - "0dte":       today's expiry only
     - "weekly_2pm": current weekly, but next weekly if after 14:00 on expiry day (strategy 3)
+    - "next":       the weekly after the current one (strategy 51)
     """
     future = sorted(e for e in expiries if e >= today)
     if not future:
@@ -80,6 +81,8 @@ def choose_expiry(expiries: list[date], today: date, rule: str, now_t: time) -> 
     nxt = future[1] if len(future) > 1 else None
     if rule == "0dte":
         return nearest if nearest == today else None
+    if rule == "next":
+        return nxt
     if nearest == today:
         if rule == "weekly_2pm" and now_t < time(14, 0):
             return nearest

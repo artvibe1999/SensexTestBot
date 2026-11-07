@@ -8,6 +8,7 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from typing import Awaitable, Callable, Optional
 
+import pandas as pd
 
 from . import indicators as ind
 from .brokers import FlatPosition, LiveBroker, OrderState, PaperBroker
@@ -24,6 +25,12 @@ from .strategies import ALL_STRATEGIES, STRATEGY_MAP, apply_selection_overrides
 from .strategies.base import CE, Signal, Strategy, sign
 
 log = logging.getLogger(__name__)
+
+VIX_TOKEN = 264969      # NSE:INDIA VIX
+NIFTY_TOKEN = 256265    # NSE:NIFTY 50
+# SENSEX heavyweights used for the advance/decline breadth feed (strategy 37).
+BREADTH_STOCKS = ["HDFCBANK", "ICICIBANK", "RELIANCE", "INFY", "BHARTIARTL", "LT", "ITC", "TCS", "AXISBANK",
+                  "KOTAKBANK", "SBIN", "M&M", "BAJFINANCE", "HINDUNILVR", "SUNPHARMA"]
 
 Notifier = Callable[[str], Awaitable[None]]
 
@@ -54,6 +61,7 @@ class Engine:
         self.last_spot: float = 0.0
         self._funds_cache: tuple[float, dict] = (0.0, {})
         self._daily_cache: tuple[Optional[date], dict, float] = (None, {}, float("nan"))
+        self._aux_cache: dict = {}
         self._jobs_done: set[str] = set()
         self._throttle: dict[str, datetime] = {}
         self._last_stop_check = datetime.min.replace(tzinfo=IST)
@@ -266,7 +274,68 @@ class Engine:
         prev, adx_v = await self.daily_info(now)
         exps = self.kite.expiries()
         nearest = exps[0] if exps else None
-        return build_context(df, now, prev, adx_v, nearest)
+        aux = await self.aux_feeds(now, df, exps)
+        return build_context(df, now, prev, adx_v, nearest, aux)
+
+    def _needs(self) -> set[str]:
+        needs = {n for s in self.enabled_strategies() for n in s.needs}
+        for p in self.positions:
+            s = STRATEGY_MAP.get(p["strategy"])
+            if s:
+                needs |= set(s.needs)
+        return needs
+
+    async def aux_feeds(self, now: datetime, df, exps) -> dict:
+        """Extra market feeds for strategies that declare `needs` (fetched only then)."""
+        needs, aux = self._needs(), {}
+        if not needs:
+            return aux
+        day0 = datetime.combine(now.date(), time(9, 15), tzinfo=IST)
+
+        def closed5(frame):
+            return frame[frame.index + timedelta(minutes=5) <= now] if not frame.empty else frame
+        try:
+            if "vix" in needs:
+                v = await asyncio.to_thread(self.kite.historical, VIX_TOKEN, day0, now, "5minute")
+                aux["vix"] = closed5(v)["close"] if not v.empty else None
+            if "nifty" in needs:
+                n = await asyncio.to_thread(self.kite.historical, NIFTY_TOKEN, day0, now, "5minute")
+                aux["nifty"] = closed5(n)[["open", "high", "low", "close"]] if not n.empty else None
+            if "first_min" in needs:
+                fm = self._aux_cache.get(("first_min", now.date()))
+                if fm is None and now.time() >= time(9, 16, 5):
+                    m = await asyncio.to_thread(self.kite.historical, self.kite.index_token, day0,
+                                                day0 + timedelta(minutes=2), "minute")
+                    if not m.empty:
+                        fm = m.iloc[0]
+                        self._aux_cache[("first_min", now.date())] = fm
+                aux["first_min"] = fm
+            if "daily" in needs:
+                d = await asyncio.to_thread(self.kite.daily_candles, now, 30)
+                aux["daily"] = d[d.index.date < now.date()]
+            if "breadth" in needs:
+                keys = [f"NSE:{s}" for s in BREADTH_STOCKS]
+                q = await asyncio.to_thread(self.kite.quote, keys)
+                adv = sum(1 for k in keys if q.get(k) and q[k]["last_price"] > (q[k].get("ohlc") or {}).get("close", 0) > 0)
+                dec = sum(1 for k in keys if q.get(k) and 0 < q[k]["last_price"] < (q[k].get("ohlc") or {}).get("close", 0))
+                series = self._aux_cache.setdefault(("breadth", now.date()), {})
+                series[df.index[-1]] = adv / max(dec, 1)
+                aux["breadth"] = pd.Series(series).sort_index()
+            if "oi" in needs and exps:
+                spot = float(df["close"].iloc[-1])
+                rows = self.kite.chain(exps[0], spot, 15)
+                q = await asyncio.to_thread(self.kite.quote, [f"{OPT_EXCHANGE}:{r['tradingsymbol']}" for r in rows])
+                oi = {"expiry": exps[0], "CE": {}, "PE": {}}
+                for r in rows:
+                    v = (q.get(f"{OPT_EXCHANGE}:{r['tradingsymbol']}") or {}).get("oi")
+                    if v:
+                        oi[r["instrument_type"]][float(r["strike"])] = float(v)
+                aux["oi"] = oi
+        except TokenError:
+            raise
+        except Exception as exc:
+            log.warning("aux feeds unavailable: %s", exc)
+        return aux
 
     async def on_candle_close(self, now: datetime, boundary: datetime) -> None:
         ctx = await self.build_ctx(now)
@@ -312,6 +381,8 @@ class Engine:
         used = self._setups(day).get(strat.sid, [])
         if not used:
             return True
+        if len(used) >= strat.max_entries:
+            return False
         if strat.reentry == "no":
             return False
         if strat.reentry == "setup":
