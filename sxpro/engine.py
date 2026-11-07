@@ -138,7 +138,7 @@ class Engine:
 
     def enabled_strategies(self) -> list[Strategy]:
         disabled = set(self.store.get("disabled", []))
-        return [s for s in ALL_STRATEGIES if s.sid not in disabled]
+        return sorted((s for s in ALL_STRATEGIES if s.sid not in disabled), key=lambda s: s.priority)
 
     async def live_funds(self, max_age: float = 30) -> dict:
         ts, data = self._funds_cache
@@ -313,6 +313,15 @@ class Engine:
             if "daily" in needs:
                 d = await asyncio.to_thread(self.kite.daily_candles, now, 30)
                 aux["daily"] = d[d.index.date < now.date()]
+            if "noise" in needs:
+                sig = self._aux_cache.get(("noise", now.date()))
+                if sig is None:
+                    from .strategies.catalog_research import noise_sigma
+                    hist = await asyncio.to_thread(self.kite.index_candles, now, "5minute", 30)
+                    sig = noise_sigma(hist, now.date())
+                    if sig is not None:
+                        self._aux_cache[("noise", now.date())] = sig
+                aux["noise"] = sig
             if "breadth" in needs:
                 keys = [f"NSE:{s}" for s in BREADTH_STOCKS]
                 q = await asyncio.to_thread(self.kite.quote, keys)

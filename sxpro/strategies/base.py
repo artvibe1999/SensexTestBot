@@ -56,6 +56,7 @@ class Strategy:
     max_entries: int = 99                # entries per day (re-entry "yes, once" = 2)
     needs: tuple = ()                    # extra feeds in ctx.aux: vix, nifty, breadth, oi, first_min, daily
     tune: dict = {}                      # backtest-derived adjustments, see apply_tuning / strategies/tuning.py
+    priority: int = 100                  # lower = evaluated first (one position at a time)
 
     # ---------------------------------------------------------------
     def in_window(self, ctx: MarketContext) -> bool:

@@ -151,6 +151,7 @@ class Data:
             adv = (c5 > pc).sum(axis=1)
             dec = (c5 < pc).sum(axis=1)
             self.breadth = (adv / dec.clip(lower=1)).where(pc.notna().any(axis=1))
+        self._noise: dict = {}
         self.first_min = self.idx1[self.idx1.index.time == time(9, 15)]
         self.first_min.index = pd.Index([ts.date() for ts in self.first_min.index])
 
@@ -174,6 +175,12 @@ class Data:
             out["first_min"] = self.first_min.loc[today]
         if "daily" in needs:
             out["daily"] = self.daily[self.daily.index.date < today].tail(30)
+        if "noise" in needs:
+            if today not in self._noise:
+                from .strategies.catalog_research import noise_sigma
+                lo = pd.Timestamp(today - timedelta(days=40), tz=IST)
+                self._noise[today] = noise_sigma(self.idx5[(self.idx5.index >= lo)], today)
+            out["noise"] = self._noise[today]
         return out
 
     def _expiries(self) -> list[date]:
@@ -412,8 +419,8 @@ def pick(spec: str) -> list[str]:
     for w in (x.strip() for x in spec.split(",") if x.strip()):
         if w == "all":
             out |= set(sids)
-        elif w in ("old", "new"):
-            out |= set(sids[:20] if w == "old" else sids[20:])
+        elif w in ("old", "new", "research"):
+            out |= set({"old": sids[:20], "new": sids[20:60], "research": sids[60:]}[w])
         else:
             out |= {s for s in sids if s == w or s.endswith("_" + w) or w in s}
     return [s for s in sids if s in out]
@@ -432,7 +439,7 @@ def main() -> None:
     r.add_argument("--lots", default="2")
     r.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     r.add_argument("--strategies", default="all",
-                   help="all | new (21-60) | old (1-20) | comma-separated IDs; one solo run each")
+                   help="all | old (1-20) | new (21-60) | research (61-65) | comma-separated IDs; one solo run each")
     r.add_argument("--combined", default="all", help="strategies enabled together in the 'ALL' run (same syntax)")
     r.add_argument("--from", dest="date_from", default=None, help="first day to replay (YYYY-MM-DD)")
     r.add_argument("--to", dest="date_to", default=None, help="last day to replay (YYYY-MM-DD)")
