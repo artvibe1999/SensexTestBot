@@ -133,3 +133,19 @@ of the 488 slots and loses 50.4k in the combined run, and IB_EXT_42 (+109.7k alo
 only 12 trades. Auto lots compound, which is why the drawdown is several times the
 starting ₹30,000.
 
+
+## Fixed 2 lots (no compounding)
+
+Same period and ₹30,000 capital, `--lots 2` (every trade ran at 2 lots).
+
+| Run | Trades | Win % | Gross ₹ | Charges ₹ | Net ₹ | PF | Max DD ₹ | Worst trade ₹ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 15 (the 16 without SUP_10) | 422 | 45.3 | 133,764 | 32,316 | +101,449 | 1.26 | 47,709 | −7,520 |
+| 16 (with SUP_10) | 585 | 51.8 | 171,812 | 45,225 | +126,587 | 1.23 | 55,712 | −7,608 |
+| 16, auto lots (for comparison) | 488 | 50.4 | 90,951 | 53,293 | +37,659 | 1.04 | 213,678 | – |
+
+Monthly net, 15 at 2 lots: Nov +11.0k, Dec +3.4k, Jan +32.8k, Feb +26.8k, Mar +42.1k,
+Apr +2.3k, May +1.4k, Jun +0.5k, Jul −4.5k, Aug −2.5k, Sep −14.5k, Oct −9.3k, Nov +11.8k.
+
+Monthly net, 16 at 2 lots: Nov +11.7k, Dec −0.5k, Jan +44.3k, Feb +32.2k, Mar +29.6k,
+Apr +16.3k, May −2.2k, Jun −11.8k, Jul −7.9k, Aug +8.7k, Sep −14.1k, Oct −2.8k, Nov +23.1k.
