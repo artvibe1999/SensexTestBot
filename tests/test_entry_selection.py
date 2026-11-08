@@ -83,7 +83,7 @@ def test_added_strategies_rank_after_verified_six(cfg):
 
 def test_failed_check_falls_through_to_next_strategy(cfg, monkeypatch):
     imp, call = Impossible(), Call()
-    imp.tune, call.tune = {"priority": 1}, {"priority": 2}
+    monkeypatch.setattr("sxpro.engine.VERIFIED_INDEX", {imp.sid: 1, call.sid: 2})
     engine, fake, day, store, msgs = _engine(cfg, monkeypatch, [imp, call])
     asyncio.run(_run_day(engine, fake, day))
     trades = store.trades("paper")
@@ -104,7 +104,7 @@ def test_best_market_fit_wins_within_the_same_group(cfg, monkeypatch):
     placed even though the PUT has the higher priority."""
     _fixed_fit(monkeypatch)
     put, call = Put(), Call()
-    put.tune, call.tune = {"priority": 1}, {"priority": 2}
+    monkeypatch.setattr("sxpro.engine.VERIFIED_INDEX", {put.sid: 1, call.sid: 2})
     engine, fake, day, store, msgs = _engine(cfg, monkeypatch, [put, call])
     asyncio.run(_run_day(engine, fake, day))
     first = store.trades("paper")[0]
@@ -114,7 +114,66 @@ def test_best_market_fit_wins_within_the_same_group(cfg, monkeypatch):
 def test_verified_set_beats_added_strategy_even_with_lower_fit(cfg, monkeypatch):
     _fixed_fit(monkeypatch)
     put, call = Put(), Call()
-    put.tune, call.tune = {"priority": 1}, {}          # call enabled later: no verified priority
+    monkeypatch.setattr("sxpro.engine.VERIFIED_INDEX", {put.sid: 1})   # call enabled later
     engine, fake, day, store, msgs = _engine(cfg, monkeypatch, [put, call])
     asyncio.run(_run_day(engine, fake, day))
     assert store.trades("paper")[0]["strategy"] == "TEST_PUT", "\n".join(msgs)
+
+
+def test_unknown_live_order_state_never_tries_a_second_strategy(cfg, monkeypatch):
+    """A live entry that errors (order may be working at the exchange) must stop the candle;
+    a paper error or a clean rejection may fall through to the next candidate."""
+    import sxpro.engine as eng
+    call = Call()
+    engine, fake, day, store, msgs = _engine(cfg, monkeypatch, [call])
+
+    class Boom:
+        def __init__(self, text):
+            self.text = text
+
+        def buy(self, *a, **k):
+            raise RuntimeError(self.text)
+    pick = eng.StrikeCandidate("SX1", 1, 80000, CE, day, 20, 0.05, 100, 99, 101, 0.5)
+    from sxpro.risk import SizeResult
+    plan = eng.EntryPlan(call, Signal(CE, sl_price=1.0), day, pick, SizeResult(2, 40, 50, 9000, 5000), 20)
+
+    async def go(mode, text):
+        monkeypatch.setattr(Engine, "broker", lambda self, m: Boom(text))
+        return await engine.execute_entry(None, eng.datetime.now(eng.IST), mode, plan, 50000)
+    assert asyncio.run(go("live", "read timeout")) == (None, False)
+    assert asyncio.run(go("live", "entry rejected: margin")) == (None, True)
+    assert asyncio.run(go("paper", "no ask price")) == (None, True)
+
+
+def test_tuning_overrides_merge_per_key(monkeypatch):
+    from sxpro.strategies import tuning
+    out = tuning.merged({"A": {"priority": 1, "x": 1}}, {"A": {"x": 2}, "B": {"y": 3}})
+    assert out == {"A": {"priority": 1, "x": 2}, "B": {"y": 3}}
+
+
+def test_kite_account_is_pinned(cfg, tmp_path):
+    from sxpro.kite_service import KiteService, TokenError
+
+    class FakeKC:
+        def __init__(self):
+            self.access_token, self.user = None, "AB1234"
+
+        def set_access_token(self, t):
+            self.access_token = t
+
+        def profile(self):
+            return {"user_id": self.user, "user_name": "x"}
+
+        def generate_session(self, rt, api_secret):
+            return {"access_token": "tok-" + rt, "user_id": self.user}
+
+        def invalidate_access_token(self, t):
+            self.invalidated = t
+    ks = KiteService(cfg)
+    ks.kite = FakeKC()
+    assert ks.activate("good") and ks.expected_user() == "AB1234"      # first login pins AB1234
+    ks.kite.user = "ZZ9999"
+    with pytest.raises(TokenError):
+        ks.exchange_request_token("r1")                                 # stranger's login rejected
+    assert ks.kite.invalidated == "tok-r1" and ks.kite.access_token == "good"
+    assert not ks.activate("stolen")                                    # nor their token

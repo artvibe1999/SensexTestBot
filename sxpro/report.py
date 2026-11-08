@@ -11,7 +11,7 @@ from datetime import date, datetime
 from typing import Any
 
 from .charges import OrderLeg, formula_charges, order_charges
-from .config import IST, Config
+from .config import Config
 from .kite_service import KiteService
 from .risk import RiskManager
 from .sheets import SheetLogger

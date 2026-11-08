@@ -134,7 +134,7 @@ def init(data):
 def exit_trade(f, i, m_in, d, stop, target, p, move):
     c, h, l, vw = f["c"], f["h"], f["l"], f["vwap"]
     exit_m = minute(S.EXIT_T)
-    best, s_out = c[m_in], None
+    best = c[m_in]
     for m in range(m_in + 1, exit_m + 1):
         if stop is not None and ((d > 0 and l[m] <= stop) or (d < 0 and h[m] >= stop)):
             return m, stop, "stop"

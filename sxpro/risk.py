@@ -71,13 +71,12 @@ class RiskManager:
 
     # ---------------- limits ----------------
     def _last_trade_id(self, mode: str) -> int:
-        trades = self.store.trades(mode)
-        return trades[-1]["id"] if trades else 0
+        return self.store.last_trade_id(mode)
 
     def loss_streak(self, mode: str) -> int:
         reset_id = int(self.store.get(f"{mode}_streak_reset_id", 0) or 0)
         streak = 0
-        for t in reversed(self.store.trades(mode)):
+        for t in self.store.recent_trades(mode, self.cfg.max_consecutive_losses + 1):
             if t["id"] <= reset_id:
                 break
             if t["net_pnl"] < 0:

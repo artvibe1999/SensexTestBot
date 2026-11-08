@@ -1,5 +1,5 @@
 """Research strategies 61-65: noise band maths, priority ordering, signals on synthetic days."""
-from datetime import date, timedelta
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,6 @@ def test_noise_sigma_matches_definition():
 
 
 def test_research_strategies_run_first():
-    from sxpro.engine import Engine
     order = sorted(ALL_STRATEGIES, key=lambda s: s.priority)
     assert [s.sid for s in order[:5]] == [s.sid for s in STRATEGIES_61_65]
     assert all(s.priority == 10 for s in STRATEGIES_61_65)

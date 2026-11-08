@@ -1493,7 +1493,7 @@ class GapFillReversal40(Spec):
 
     def entry(self, ctx):
         t = ctx.today
-        c, p = ctx.c(0), ctx.c(1)
+        c = ctx.c(0)
         price, pdc = float(c["close"]), ctx.pdc
         day_open = float(t["open"].iloc[0])
         tol = 0.0002 * price
@@ -2061,7 +2061,7 @@ class FibConfluence56(Spec):
 
     def entry(self, ctx):
         df = ctx.df.tail(40)
-        c, p = ctx.c(0), ctx.c(1)
+        c = ctx.c(0)
         price = float(c["close"])
         if c["volume"] <= c["vol_avg20"]:
             return None

@@ -134,6 +134,17 @@ class Store:
         with self._lock:
             return [dict(r) for r in self._db.execute(sql, args).fetchall()]
 
+    def recent_trades(self, mode: str, limit: int) -> list[dict]:
+        """Newest first."""
+        with self._lock:
+            return [dict(r) for r in self._db.execute(
+                "SELECT id, net_pnl FROM trades WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()]
+
+    def last_trade_id(self, mode: str) -> int:
+        with self._lock:
+            row = self._db.execute("SELECT COALESCE(MAX(id), 0) AS m FROM trades WHERE mode=?", (mode,)).fetchone()
+        return int(row["m"])
+
     def realized_pnl(self, mode: str, since_day: str | None = None) -> float:
         sql = "SELECT COALESCE(SUM(net_pnl), 0) AS s FROM trades WHERE mode=?"
         args: list[Any] = [mode]

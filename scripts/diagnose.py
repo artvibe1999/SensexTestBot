@@ -7,10 +7,8 @@ excursion) and MAE (worst adverse) while the trade was open, and the move at exi
 import json
 import re
 import sys
-from collections import Counter, defaultdict
-from datetime import datetime
+from collections import Counter
 
-import numpy as np
 import pandas as pd
 
 from sxpro.backtest import Data

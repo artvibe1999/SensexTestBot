@@ -88,22 +88,53 @@ class KiteService:
             return False
         return self.activate(token)
 
+    # The Zerodha account the bot trades. KITE_USER_ID pins it explicitly; otherwise the first
+    # account that logs in is remembered (data/kite_user.json) and any other account is rejected,
+    # so a stranger completing the public login link can never attach their account.
+    @property
+    def _pin_path(self) -> str:
+        return os.path.join(self.cfg.data_dir, "kite_user.json")
+
+    def expected_user(self) -> str:
+        if self.cfg.kite_user_id.strip():
+            return self.cfg.kite_user_id.strip().upper()
+        try:
+            with open(self._pin_path) as fh:
+                return str(json.load(fh).get("user_id", "")).upper()
+        except (OSError, ValueError):
+            return ""
+
+    def _pin_user(self, user_id: str) -> None:
+        if not user_id or self.expected_user():
+            return
+        os.makedirs(self.cfg.data_dir, exist_ok=True)
+        fd = os.open(self._pin_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"user_id": user_id.upper(), "pinned_at": datetime.now(IST).isoformat()}, fh)
+
     def activate(self, token: str) -> bool:
         self.kite.set_access_token(token)
         try:
-            self.user = self.kite.profile()
-            self.ready = True
-            return True
+            user = self.kite.profile()
         except Exception as exc:  # token expired / invalid
             log.info("access token invalid: %s", exc)
             self.ready = False
             return False
+        expected = self.expected_user()
+        if expected and str(user.get("user_id", "")).upper() != expected:
+            log.error("access token belongs to %s, expected %s: not used", user.get("user_id"), expected)
+            self.ready = False
+            return False
+        self.user = user
+        self._pin_user(str(user.get("user_id", "")))
+        self.ready = True
+        return True
 
     def exchange_request_token(self, request_token: str) -> dict:
         previous = getattr(self.kite, "access_token", None)
         data = self.kite.generate_session(request_token, api_secret=self.cfg.kite_api_secret)
         token = data["access_token"]
-        expected = self.cfg.kite_user_id.strip().upper()
+        expected = self.expected_user()
         if expected and str(data.get("user_id", "")).upper() != expected:
             # Someone logged in with a different Zerodha account: never trade it.
             try:

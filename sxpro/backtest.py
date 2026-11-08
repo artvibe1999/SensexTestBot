@@ -357,7 +357,7 @@ def run_one(args: tuple) -> dict:
     data = _DATA_CACHE[data_dir]
     from .strategies import ALL_STRATEGIES
     from .strategies import tuning as tuning_mod
-    table = {**tuning_mod.TUNING, **(tune or {})}
+    table = tuning_mod.merged(tuning_mod.TUNING, tune or {})
     for s in ALL_STRATEGIES:
         s.tune = dict(table.get(s.sid, {}))
     days = data.days

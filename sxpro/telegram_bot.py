@@ -340,7 +340,8 @@ class TelegramController:
                  for i, s in enumerate(order[:25], 1)]
         more = f"\n… and {len(order) - 25} more" if len(order) > 25 else ""
         await self.reply(update, f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
-                                 f"Check order now ({len(order)} enabled):\n" + "\n".join(lines) + more)
+                                 f"Priority order ({len(order)} enabled). When several signal on one candle, "
+                                 f"each group is checked best market fit first:\n" + "\n".join(lines) + more)
 
     async def cmd_enable(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await self._toggle(update, ctx, True)

@@ -21,6 +21,21 @@ def sign(direction: str) -> int:
     return 1 if direction == CE else -1
 
 
+def trend15_agrees(ctx: MarketContext, direction: str) -> bool:
+    """15-minute 9 EMA is on the trade's side of the 21 EMA (False without 15-min data)."""
+    l15 = ctx.df15.iloc[-1] if ctx.df15 is not None and len(ctx.df15) else None
+    if l15 is None:
+        return False
+    gap = float(l15["ema9"]) - float(l15["ema21"])
+    return gap == gap and sign(direction) * gap > 0   # NaN-safe
+
+
+def vwap_side_agrees(ctx: MarketContext, direction: str) -> bool:
+    """Last close is on the trade's side of session VWAP."""
+    c = ctx.last
+    return sign(direction) * (float(c["close"]) - float(c["vwap"])) > 0
+
+
 @dataclass
 class Signal:
     direction: str                       # CE / PE
@@ -127,12 +142,10 @@ class Strategy:
             return None
         if t.get("adx_max") is not None and not (c["adx"] <= t["adx_max"]):
             return None
-        if t.get("trend15"):
-            l15 = ctx.df15.iloc[-1] if ctx.df15 is not None and len(ctx.df15) else None
-            if l15 is None or sign(sig.direction) * (l15["ema9"] - l15["ema21"]) <= 0:
-                return None
+        if t.get("trend15") and not trend15_agrees(ctx, sig.direction):
+            return None
         d = sign(sig.direction)
-        if t.get("vwap_side") and d * (price - float(c["vwap"])) <= 0:
+        if t.get("vwap_side") and not vwap_side_agrees(ctx, sig.direction):
             return None
         day_open = float(ctx.today["open"].iloc[0])
         if t.get("day_move") is not None and d * (price / day_open - 1) < t["day_move"]:
