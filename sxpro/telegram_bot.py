@@ -335,7 +335,12 @@ class TelegramController:
         disabled = disabled - set(ids) if enable else disabled | set(ids)
         self.engine.store.set("disabled", sorted(disabled))
         self._event("strategies", f"{'enabled' if enable else 'disabled'} {', '.join(ids)}")
-        await self.reply(update, f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}")
+        order = self.engine.enabled_strategies()
+        lines = [f"{i}. {s.sid}" + ("" if self.engine.strategy_rank(s)[0] == 0 else "  (added, after the verified set)")
+                 for i, s in enumerate(order[:25], 1)]
+        more = f"\n… and {len(order) - 25} more" if len(order) > 25 else ""
+        await self.reply(update, f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
+                                 f"Check order now ({len(order)} enabled):\n" + "\n".join(lines) + more)
 
     async def cmd_enable(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await self._toggle(update, ctx, True)

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import math
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Awaitable, Callable, Optional
 
@@ -15,7 +16,7 @@ from .brokers import FlatPosition, LiveBroker, OrderState, PaperBroker
 from .charges import OrderLeg, formula_charges
 from .config import IST, MARKET_CLOSE, MARKET_OPEN, Config
 from .kite_service import INDEX_SYMBOL, OPT_EXCHANGE, KiteService, TokenError
-from .market import MarketContext, build_context
+from .market import BEAR, BULL, MarketContext, build_context
 from .options import StrikeCandidate, choose_expiry, option_delta, select_strike
 from .report import DailyReporter
 from .risk import RiskManager
@@ -33,6 +34,20 @@ BREADTH_STOCKS = ["HDFCBANK", "ICICIBANK", "RELIANCE", "INFY", "BHARTIARTL", "LT
                   "KOTAKBANK", "SBIN", "M&M", "BAJFINANCE", "HINDUNILVR", "SUNPHARMA"]
 
 Notifier = Callable[[str], Awaitable[None]]
+
+
+@dataclass
+class EntryPlan:
+    """A signal that passed every pre-trade check, ready to be placed."""
+    strat: Strategy
+    sig: Signal
+    expiry: date
+    pick: StrikeCandidate
+    sz: object            # risk.SizeResult
+    lot_size: int
+    fit: int              # market-fit points (0-3), see Engine.market_fit
+    fit_notes: str
+    rank: tuple           # (verified set first, best fit, priority)
 
 
 def floor5(ts: datetime) -> datetime:
@@ -138,7 +153,7 @@ class Engine:
 
     def enabled_strategies(self) -> list[Strategy]:
         disabled = set(self.store.get("disabled", []))
-        return sorted((s for s in ALL_STRATEGIES if s.sid not in disabled), key=lambda s: s.tune.get("priority", s.priority))
+        return sorted((s for s in ALL_STRATEGIES if s.sid not in disabled), key=self.strategy_rank)
 
     async def live_funds(self, max_age: float = 30) -> dict:
         ts, data = self._funds_cache
@@ -438,39 +453,87 @@ class Engine:
             signals.append((strat, sig))
         if not signals:
             return
-        strat, sig = signals[0]
-        others = ", ".join(s.sid for s, _ in signals[1:])
-        await self.open_position(ctx, now, strat, sig, capital, available, others)
+        # Every signal gets the full pre-trade check (expiry, strike in the strategy's delta /
+        # premium band with an acceptable spread, configured lots within the available margin,
+        # per-trade loss cap). The best plan that passes is placed; a failed check falls
+        # through to the next candidate instead of skipping the candle.
+        chains: dict = {}
+        plans: list[EntryPlan] = []
+        rejected: list[str] = []
+        for strat, sig in signals:
+            plan, why = await self.plan_entry(ctx, now, strat, sig, capital, available, chains)
+            if plan is None:
+                rejected.append(f"{strat.sid} {sig.direction}: {why}")
+            else:
+                plans.append(plan)
+        if not plans:
+            await self.say_throttled("skip-" + "-".join(s.sid for s, _ in signals),
+                                     "⏭️ Signal skipped: " + "; ".join(rejected), 30)
+            return
+        plans.sort(key=lambda pl: pl.rank)
+        best = plans[0]
+        notes = [f"{pl.strat.sid} {pl.sig.direction} (fit {pl.fit}/3)" for pl in plans[1:]] + rejected
+        await self.execute_entry(ctx, now, best, capital, "; ".join(notes))
 
-    async def open_position(self, ctx: MarketContext, now: datetime, strat: Strategy, sig: Signal,
-                            capital: float, available: float, others: str = "") -> Optional[dict]:
+    def strategy_rank(self, strat: Strategy) -> tuple[int, float]:
+        """Order of the enabled strategies: the verified set (strategies/tuning.py gives each an
+        explicit priority) first, then any other enabled strategy, e.g. one switched on with
+        /enable, by its own priority."""
+        if "priority" in strat.tune:
+            return 0, float(strat.tune["priority"])
+        return 1, float(strat.priority)
+
+    @staticmethod
+    def market_fit(ctx: MarketContext, direction: str) -> tuple[int, str]:
+        """How well the current market agrees with a trade: one point each for the regime,
+        the 15-minute 9/21 EMA trend and the side of VWAP."""
+        d = sign(direction)
+        notes, score = [], 0
+        if (ctx.regime == BULL and d > 0) or (ctx.regime == BEAR and d < 0):
+            score += 1
+            notes.append("regime")
+        l15 = ctx.df15.iloc[-1] if ctx.df15 is not None and len(ctx.df15) else None
+        if l15 is not None and d * (float(l15["ema9"]) - float(l15["ema21"])) > 0:
+            score += 1
+            notes.append("15m trend")
+        if d * (float(ctx.last["close"]) - float(ctx.last["vwap"])) > 0:
+            score += 1
+            notes.append("VWAP side")
+        return score, ", ".join(notes) or "none"
+
+    async def plan_entry(self, ctx: MarketContext, now: datetime, strat: Strategy, sig: Signal,
+                         capital: float, available: float, chains: Optional[dict] = None
+                         ) -> tuple[Optional["EntryPlan"], str]:
+        """Pre-trade check for one signal; returns (plan, "") or (None, reason)."""
         mode = self.mode
-        today = now.date()
-        expiry = choose_expiry(self.kite.expiries(), today, strat.expiry_rule, now.time())
-        label = f"{strat.sid} {sig.direction}"
+        chains = {} if chains is None else chains
+        expiry = choose_expiry(self.kite.expiries(), now.date(), strat.expiry_rule, now.time())
         if expiry is None:
-            await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {label} signal skipped: no eligible expiry", 30)
-            return None
-        spot = await asyncio.to_thread(self.kite.spot)
-        rows = [r for r in self.kite.chain(expiry, spot, 12) if r["instrument_type"] == sig.direction]
-        keys = [f"{OPT_EXCHANGE}:{r['tradingsymbol']}" for r in rows]
-        quotes = await asyncio.to_thread(self.kite.quote, keys) if keys else {}
-        cands: list[StrikeCandidate] = []
-        for r in rows:
-            q = quotes.get(f"{OPT_EXCHANGE}:{r['tradingsymbol']}")
-            if not q:
-                continue
-            depth = q.get("depth") or {}
-            bid = next((float(l["price"]) for l in depth.get("buy", []) if l.get("price", 0) > 0), 0.0)
-            ask = next((float(l["price"]) for l in depth.get("sell", []) if l.get("price", 0) > 0), 0.0)
-            ltp = float(q.get("last_price", 0.0))
-            mid = (bid + ask) / 2 if bid and ask else ltp
-            if mid <= 0:
-                continue
-            dlt = option_delta(mid, spot, float(r["strike"]), now, expiry, self.cfg.risk_free_rate, sig.direction == CE)
-            cands.append(StrikeCandidate(r["tradingsymbol"], int(r["instrument_token"]), float(r["strike"]),
-                                         sig.direction, expiry, int(r["lot_size"]), float(r.get("tick_size") or 0.05),
-                                         ltp, bid, ask, dlt))
+            return None, "no eligible expiry"
+        key = (expiry, sig.direction)
+        if key not in chains:
+            spot = await asyncio.to_thread(self.kite.spot)
+            rows = [r for r in self.kite.chain(expiry, spot, 12) if r["instrument_type"] == sig.direction]
+            keys = [f"{OPT_EXCHANGE}:{r['tradingsymbol']}" for r in rows]
+            quotes = await asyncio.to_thread(self.kite.quote, keys) if keys else {}
+            cands: list[StrikeCandidate] = []
+            for r in rows:
+                q = quotes.get(f"{OPT_EXCHANGE}:{r['tradingsymbol']}")
+                if not q:
+                    continue
+                depth = q.get("depth") or {}
+                bid = next((float(l["price"]) for l in depth.get("buy", []) if l.get("price", 0) > 0), 0.0)
+                ask = next((float(l["price"]) for l in depth.get("sell", []) if l.get("price", 0) > 0), 0.0)
+                ltp = float(q.get("last_price", 0.0))
+                mid = (bid + ask) / 2 if bid and ask else ltp
+                if mid <= 0:
+                    continue
+                dlt = option_delta(mid, spot, float(r["strike"]), now, expiry, self.cfg.risk_free_rate, sig.direction == CE)
+                cands.append(StrikeCandidate(r["tradingsymbol"], int(r["instrument_token"]), float(r["strike"]),
+                                             sig.direction, expiry, int(r["lot_size"]), float(r.get("tick_size") or 0.05),
+                                             ltp, bid, ask, dlt))
+            chains[key] = cands
+        cands = chains[key]
         lot_size = cands[0].lot_size if cands else self.kite.lot_size()
         lots_set = self.lots_setting(mode)
         pct = strat.capital_pct
@@ -479,15 +542,31 @@ class Engine:
         pick, why = select_strike(cands, strat.delta_min, strat.delta_max, strat.delta_target,
                                   strat.prem_min, strat.prem_max, max_aff, self.cfg.max_spread_pct)
         if pick is None:
-            await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {label} signal skipped: {why}", 30)
-            return None
+            return None, why
         premium = pick.entry_price
-        und_stop = sig.sl_price if sig.sl_price is not None else sig.sl_close
         strat_prem_stop = premium * (1 - sig.prem_sl_pct) if sig.prem_sl_pct else None
         sz = self.risk.size(mode, capital, available, premium, lot_size, pct, lots_set, strat_prem_stop)
         if sz.lots <= 0:
-            await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {label} signal skipped: {sz.reason}", 30)
+            return None, sz.reason
+        fit, fit_notes = self.market_fit(ctx, sig.direction)
+        group, prio = self.strategy_rank(strat)
+        return EntryPlan(strat, sig, expiry, pick, sz, lot_size, fit, fit_notes, (group, -fit, prio)), ""
+
+    async def open_position(self, ctx: MarketContext, now: datetime, strat: Strategy, sig: Signal,
+                            capital: float, available: float, others: str = "") -> Optional[dict]:
+        plan, why = await self.plan_entry(ctx, now, strat, sig, capital, available)
+        if plan is None:
+            await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {strat.sid} {sig.direction} signal skipped: {why}", 30)
             return None
+        return await self.execute_entry(ctx, now, plan, capital, others)
+
+    async def execute_entry(self, ctx: MarketContext, now: datetime, plan: "EntryPlan", capital: float,
+                            others: str = "") -> Optional[dict]:
+        mode = self.mode
+        today = now.date()
+        strat, sig, expiry, pick, sz, lot_size = plan.strat, plan.sig, plan.expiry, plan.pick, plan.sz, plan.lot_size
+        premium = pick.entry_price
+        und_stop = sig.sl_price if sig.sl_price is not None else sig.sl_close
         broker = self.broker(mode)
         try:
             fill = await asyncio.to_thread(broker.buy, pick.tradingsymbol, sz.qty, pick.tick_size)
@@ -540,8 +619,9 @@ class Engine:
             f"Strategy: {strat.sid} – {strat.name}\nWhy: {sig.note} | Regime {ctx.regime}\n"
             f"SENSEX {ctx.last['close']:.0f} | Δ {pick.delta:.2f} | spread {pick.spread_pct:.2%}\n"
             f"Underlying SL {stop_txt} · Target {tgt} · Premium stop {hard_stop:.2f}\n"
-            f"Capital {fmt_money(capital)} · Max loss {fmt_money(sz.max_loss)}"
-            + (f"\nAlso signalled: {others}" if others else "")
+            f"Capital {fmt_money(capital)} · Max loss {fmt_money(sz.max_loss)}\n"
+            f"Market fit {plan.fit}/3 ({plan.fit_notes}) · {sz.lots} lots within margin {fmt_money(sz.alloc)}"
+            + (f"\nAlso checked: {others}" if others else "")
         )
         return pos
 
