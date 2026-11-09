@@ -76,6 +76,13 @@ class OpeningRangeBreakout(Strategy):
 
 
 # 2 ---------------------------------------------------------------------------
+def sweep_buffer(c, k: float = 0.5) -> float:
+    """Stop buffer beyond a wick / pivot so a liquidity sweep of the exact level does not
+    stop the trade: k x ATR(14) of the signal candle (0 while ATR is not available)."""
+    atr = float(c["atr"])
+    return k * atr if atr == atr and atr > 0 else 0.0
+
+
 class LiquiditySweepReversal(Strategy):
     sid, name, category = "SENSEX_TRAP_02", "Liquidity Sweep Reversal", REVERSAL
     start, end, time_exit, max_hold_min = time(9, 30), time(14, 45), time(15, 15), 120
@@ -103,7 +110,8 @@ class LiquiditySweepReversal(Strategy):
                 absorption = c["volume"] >= b["volume"] > 0 and b["volume"] >= b["vol_avg20"]
                 if back_inside and pattern and absorption:
                     wick = ctx.df.iloc[-1 - back:]
-                    sl = float(wick["high"].max()) if d == PE else float(wick["low"].min())
+                    buf = sweep_buffer(c)
+                    sl = float(wick["high"].max()) + buf if d == PE else float(wick["low"].min()) - buf
                     tgt = _nearest_level([float(c["vwap"]), lv["P"]], float(c["close"]), d)
                     if tgt is None:
                         tgt = self.rr_target(c["close"], sl, 1.5, d)
@@ -364,9 +372,9 @@ class InsideBarBreakout(Strategy):
             return None
         slope = c["ema9"] - ctx.c(3)["ema9"]
         if c["close"] > mother["high"] and slope > 0:
-            d, sl = CE, float(ib["low"])
+            d, sl = CE, float(ib["low"]) - sweep_buffer(c)
         elif c["close"] < mother["low"] and slope < 0:
-            d, sl = PE, float(ib["high"])
+            d, sl = PE, float(ib["high"]) + sweep_buffer(c)
         else:
             return None
         return Signal(d, sl_price=sl, target=self.rr_target(c["close"], sl, 1.5, d),
@@ -987,12 +995,13 @@ class PdcBounce23(Spec):
         tol = 0.0003 * price
         prior = ctx.today.iloc[-4:-1]
         hi, lo = ctx.day_high_low()
+        buf = max(15.0, sweep_buffer(c))   # 0.5 x ATR beyond PDC, never closer than the old 15 pts
         if c["low"] <= pdc + tol and price > pdc and p["close"] > pdc and (is_bull_pin(c) or is_bull_engulfing(c, p)) \
                 and c["volume"] > prior["volume"].mean():
-            return self.make(CE, price, pdc - 15, target=hi, note=f"PDC {pdc:.0f} bounce")
+            return self.make(CE, price, pdc - buf, target=hi, note=f"PDC {pdc:.0f} bounce")
         if c["high"] >= pdc - tol and price < pdc and p["close"] < pdc and (is_bear_pin(c) or is_bear_engulfing(c, p)) \
                 and c["volume"] > prior["volume"].mean():
-            return self.make(PE, price, pdc + 15, target=lo, note=f"PDC {pdc:.0f} rejection")
+            return self.make(PE, price, pdc + buf, target=lo, note=f"PDC {pdc:.0f} rejection")
         return None
 
     def exit_rule(self, ctx, pos):
@@ -1639,10 +1648,11 @@ class DoubleInsideBar44(Spec):
             return None
         price, mid = float(c["close"]), float((m["high"] + m["low"]) / 2)
         meta = {"mother_high": float(m["high"]), "mother_low": float(m["low"])}
+        buf = sweep_buffer(c)
         if price > m["high"]:
-            return self.make(CE, price, mid, rr=2.5, meta=meta, note="double inside bar break up")
+            return self.make(CE, price, mid - buf, rr=2.5, meta=meta, note="double inside bar break up")
         if price < m["low"]:
-            return self.make(PE, price, mid, rr=2.5, meta=meta, note="double inside bar break down")
+            return self.make(PE, price, mid + buf, rr=2.5, meta=meta, note="double inside bar break down")
         return None
 
     def exit_rule(self, ctx, pos):

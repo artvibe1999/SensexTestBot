@@ -24,7 +24,7 @@ from .sheets import SheetLogger
 from .store import Store
 from .strategies import ALL_STRATEGIES, STRATEGY_MAP, apply_selection_overrides
 from .strategies.base import CE, Signal, Strategy, sign, trend15_agrees, vwap_side_agrees
-from .strategies.tuning import VERIFIED_INDEX
+from .strategies.tuning import RETIRED, RETIRED_FLAG, VERIFIED_INDEX
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +95,11 @@ class Engine:
         store.setdefault("lots_paper", "auto")
         store.setdefault("lots_live", "auto")
         store.setdefault("paused", False)
-        store.setdefault("disabled", [])
+        store.setdefault("disabled", sorted(RETIRED))
+        if not store.get(RETIRED_FLAG):
+            # one-time: switch the retired strategies off on an existing install too
+            store.set("disabled", sorted(set(store.get("disabled", []) or []) | set(RETIRED)))
+            store.set(RETIRED_FLAG, True)
         if store.get("paper_balance") is None:
             self.risk.set_paper_capital(cfg.default_paper_capital)
 

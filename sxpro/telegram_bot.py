@@ -12,6 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, filters
 from .config import IST, Config
 from .engine import Engine, fmt_money
 from .strategies import ALL_STRATEGIES, STRATEGY_MAP
+from .strategies.tuning import RETIRED
 
 log = logging.getLogger(__name__)
 
@@ -339,7 +340,10 @@ class TelegramController:
         lines = [f"{i}. {s.sid}" + ("" if self.engine.strategy_rank(s)[0] == 0 else "  (added, after the verified set)")
                  for i, s in enumerate(order[:25], 1)]
         more = f"\n… and {len(order) - 25} more" if len(order) > 25 else ""
-        await self.reply(update, f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
+        retired = [sid for sid in ids if sid in RETIRED] if enable else []
+        warn = (f"⚠️ Retired in the 2026-11-09 review (structurally weak): {', '.join(retired)}\n"
+                if retired else "")
+        await self.reply(update, warn + f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
                                  f"Priority order ({len(order)} enabled). When several signal on one candle, "
                                  f"each group is checked best market fit first:\n" + "\n".join(lines) + more)
 
