@@ -128,7 +128,8 @@ class RiskManager:
         Allocated margin = available margin x MARGIN_UTILIZATION_PCT (90%), scaled by the
         strategy's share (0DTE uses half) and halved under emergency protection.
         lots_setting == "auto" -> that formula; integer -> user-fixed lots. Both are bounded by
-        the allocated margin; the per-trade loss cap sets the hard premium stop.
+        the allocated margin; the per-trade loss cap sets the hard premium stop, raised by
+        SLIPPAGE_BUFFER_PTS so a slipped stop exit still fits the cap.
         """
         alloc = max(0.0, available) * self.cfg.alloc_pct * (capital_pct / 0.10)
         if self.emergency(mode, capital):
@@ -147,7 +148,7 @@ class RiskManager:
             why = (f"allocated margin ₹{alloc:,.0f} too small for 1 lot at ₹{premium:.1f} x {lot_size}")
             return SizeResult(0, 0, 0, alloc, max_loss, why)
         qty = lots * lot_size
-        cap_stop = premium - max_loss / qty
+        cap_stop = premium - max_loss / qty + self.cfg.slippage_buffer_pts
         hard_stop = max(cap_stop, strategy_prem_stop) if strategy_prem_stop else cap_stop
         hard_stop = max(hard_stop, 0.05)
         if (premium - hard_stop) / premium < 0.05:

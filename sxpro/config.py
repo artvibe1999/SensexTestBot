@@ -75,6 +75,9 @@ class Config:
     cooloff_hours: float = field(default_factory=lambda: _float("COOLOFF_HOURS", 24))
     emergency_drawdown_pct: float = field(default_factory=lambda: _float("EMERGENCY_DRAWDOWN_PCT", 0.20))
     max_open_positions: int = field(default_factory=lambda: _int("MAX_OPEN_POSITIONS", 1))
+    # Premium points of expected stop-exit slippage: the cap-derived premium stop sits this
+    # far above the exact cap level, so an exit that slips still stays within the loss cap.
+    slippage_buffer_pts: float = field(default_factory=lambda: _float("SLIPPAGE_BUFFER_PTS", 2))
 
     # Strike selection
     max_spread_pct: float = field(default_factory=lambda: _float("MAX_SPREAD_PCT", 0.01))

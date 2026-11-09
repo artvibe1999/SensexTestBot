@@ -65,17 +65,27 @@ def test_sizing_auto_and_fixed(cfg):
     # 50k margin x 90% = 45000 alloc, lot 20, premium 120 -> floor(45000/2400) = 18 lots
     r = rm.size("paper", 50000, 50000, 120, 20, 0.10, "auto", 102)
     assert r.lots == 18 and r.qty == 360
-    # 10% loss cap: 5000/360 = 13.89/unit -> stop 106.11 is tighter than the strategy's 102
-    assert r.hard_stop == pytest.approx(120 - 5000 / 360, abs=0.01)
+    # 10% loss cap: 5000/360 = 13.89/unit, +2 pts slippage buffer -> stop 108.11, tighter than 102
+    assert r.hard_stop == pytest.approx(120 - 5000 / 360 + 2, abs=0.01)
     # 0DTE (capital_pct 0.05) deploys half: 22500/2400 -> 9 lots
     assert rm.size("paper", 50000, 50000, 120, 20, 0.05, "auto", None).lots == 9
-    # fixed lots honoured within the 90% margin; cap stop = 120 - 5000/60
+    # fixed lots honoured within the 90% margin; cap stop = 120 - 5000/60 + 2
     r = rm.size("paper", 50000, 50000, 120, 20, 0.10, 3, None)
-    assert r.lots == 3 and r.hard_stop == pytest.approx(120 - 5000 / 60, abs=0.01)
+    assert r.lots == 3 and r.hard_stop == pytest.approx(120 - 5000 / 60 + 2, abs=0.01)
     # fixed lots beyond 90% of margin are cut down to what fits
     assert rm.size("paper", 50000, 50000, 120, 20, 0.10, 40, None).lots == 18
     # insufficient margin
     assert rm.size("paper", 50000, 1000, 120, 20, 0.10, 2, None).lots == 0
+
+
+def test_slippage_buffer(cfg, monkeypatch):
+    # 9 Nov 2026 trade: 2 lots @ 692.25, ₹5,000 cap -> stop 567.25 + 2 = 569.25
+    r = RiskManager(cfg, Store(cfg.db_path)).size("paper", 50000, 50000, 692.25, 20, 0.10, 2, None)
+    assert r.lots == 2 and r.hard_stop == pytest.approx(569.25, abs=0.01)
+    monkeypatch.setenv("SLIPPAGE_BUFFER_PTS", "0")
+    c0 = Config()
+    assert RiskManager(c0, Store(c0.db_path)).size("paper", 50000, 50000, 692.25, 20, 0.10, 2, None).hard_stop \
+        == pytest.approx(567.25, abs=0.01)
 
 
 def test_risk_limits(cfg):
