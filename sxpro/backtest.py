@@ -329,6 +329,8 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
     if enabled:
         keep = {enabled} if isinstance(enabled, str) else set(enabled)
         store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid not in keep])
+    else:
+        store.set("disabled", [])   # "all": the bot's own default enables only the verified set
     skips: dict[str, int] = {}
 
     async def notify(text: str):

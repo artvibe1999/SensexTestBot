@@ -19,15 +19,18 @@ VERIFIED_ORDER: list[str] = [
 ]
 VERIFIED_INDEX: dict[str, int] = {sid: i + 1 for i, sid in enumerate(VERIFIED_ORDER)}
 
+# Default deny: only the verified set is enabled on first boot, and once on existing
+# installs at Engine startup (store flag DEFAULT_DENY_FLAG) every other strategy is
+# switched off. /enable can still switch one on afterwards (it ranks after the verified set).
+DEFAULT_DENY_FLAG = "default_deny_2026_11_09_applied"
+
 # Retired after the 2026-11-09 structural review (lagging crossovers, naked oscillators,
-# rigid time blocks, 0DTE gamma exposure). Disabled on first boot and once on existing
-# installs (Engine startup, store flag RETIRED_FLAG); /enable can still switch one back on.
+# rigid time blocks, 0DTE gamma exposure); /enable warns before switching one on.
 RETIRED: tuple[str, ...] = (
     "SENSEX_WMA_13", "SENSEX_RNG_14", "SENSEX_EMA_TWIST_33", "SENSEX_TEMA_ALIGN_49",
     "SENSEX_EOD_IMB_51", "SENSEX_VWAP_X_16", "SENSEX_MACD_17", "SENSEX_TREND_EXH_30",
     "SENSEX_0DTE_12", "SENSEX_VWAP_PIN_28", "SENSEX_GAMMA_SQR_39", "SENSEX_FIB_19",
 )
-RETIRED_FLAG = "retired_2026_11_09_applied"
 
 TUNING: dict[str, dict] = {}
 

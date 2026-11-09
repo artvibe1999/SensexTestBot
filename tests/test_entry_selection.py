@@ -11,6 +11,7 @@ from sxpro.engine import Engine
 from sxpro.store import Store
 from sxpro.strategies import ALL_STRATEGIES, STRATEGY_MAP
 from sxpro.strategies.base import CE, PE, Signal, Strategy
+from sxpro.strategies.tuning import DEFAULT_DENY_FLAG
 
 from .fakes import FakeKite, synthetic_candles
 from .test_bot import _run_day
@@ -74,6 +75,7 @@ def test_added_strategies_rank_after_verified_six(cfg):
     store = Store(cfg.db_path)
     keep = set(VERIFIED) | {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
     store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid not in keep])
+    store.set(DEFAULT_DENY_FLAG, True)   # extras switched on with /enable after the default-deny clean-up
     engine = Engine(cfg, store, FakeKite(synthetic_candles(2), synthetic_candles(2).index[-1].date()))
     order = [s.sid for s in engine.enabled_strategies()]
     assert order[:6] == VERIFIED

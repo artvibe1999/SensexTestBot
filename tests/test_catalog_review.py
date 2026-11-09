@@ -1,17 +1,21 @@
-"""2026-11-09 catalog review: 12 retired strategies off by default (and once on existing
-installs), ATR buffer on wick / pivot stops of strategies 02, 09, 23, 44."""
+"""2026-11-09 catalog review: default deny (only the verified six enabled on first boot and
+once on existing installs), 12 retired strategies flagged, ATR buffer on wick / pivot stops
+of strategies 02, 09, 23, 44."""
 import pandas as pd
 import pytest
 
 from sxpro.config import Config
 from sxpro.engine import Engine
 from sxpro.store import Store
-from sxpro.strategies import STRATEGY_MAP
+from sxpro.strategies import ALL_STRATEGIES, STRATEGY_MAP
 from sxpro.strategies.base import CE, PE
 from sxpro.strategies.catalog import InsideBarBreakout, sweep_buffer
-from sxpro.strategies.tuning import RETIRED, RETIRED_FLAG, VERIFIED_ORDER
+from sxpro.strategies.tuning import DEFAULT_DENY_FLAG, RETIRED, VERIFIED_ORDER
 
 from .fakes import FakeKite, synthetic_candles
+
+LIVE_EXTRAS = ["SENSEX_VWAP_03", "SENSEX_GAP_07", "SENSEX_VOL_08", "SENSEX_SUP_10", "SENSEX_0DTE_12",
+               "SENSEX_DOJI_15", "SENSEX_VWAP_X_16", "SENSEX_MCD_18", "SENSEX_FIB_19"]
 
 
 @pytest.fixture
@@ -26,27 +30,37 @@ def _engine(cfg, store):
     return Engine(cfg, store, FakeKite(df, df.index[-1].date()))
 
 
+def _enabled(eng):
+    return [s.sid for s in eng.enabled_strategies()]
+
+
 def test_retired_ids_exist_and_exclude_verified():
     assert len(RETIRED) == 12 and all(sid in STRATEGY_MAP for sid in RETIRED)
     assert not set(RETIRED) & set(VERIFIED_ORDER)
 
 
-def test_fresh_install_disables_retired(cfg):
+def test_fresh_install_enables_only_verified_six(cfg):
     store = Store(cfg.db_path)
     eng = _engine(cfg, store)
-    assert set(store.get("disabled")) == set(RETIRED) and store.get(RETIRED_FLAG)
-    assert not {s.sid for s in eng.enabled_strategies()} & set(RETIRED)
+    assert _enabled(eng) == VERIFIED_ORDER and store.get(DEFAULT_DENY_FLAG)
+    assert len(store.get("disabled")) == len(ALL_STRATEGIES) - 6
 
 
-def test_existing_install_gets_retired_once_then_respects_enable(cfg):
+def test_live_install_drops_extras_once_then_respects_enable(cfg):
+    """The 9 Nov live state (six + 9 extras) becomes the six on the next boot; a strategy
+    enabled afterwards with /enable survives restarts."""
     store = Store(cfg.db_path)
-    store.set("disabled", ["SENSEX_TRAP_02"])          # older install, flag not set
-    _engine(cfg, store)
-    assert set(store.get("disabled")) == set(RETIRED) | {"SENSEX_TRAP_02"}
-    # the user switches one back on with /enable; a restart must not undo it
-    store.set("disabled", sorted(set(store.get("disabled")) - {"SENSEX_FIB_19"}))
-    _engine(cfg, store)
-    assert "SENSEX_FIB_19" not in store.get("disabled")
+    keep = set(VERIFIED_ORDER) | set(LIVE_EXTRAS)
+    store.set("disabled", sorted(s.sid for s in ALL_STRATEGIES if s.sid not in keep))   # flag not set
+    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER
+    store.set("disabled", sorted(set(store.get("disabled")) - {"SENSEX_VWAP_03"}))      # /enable 03
+    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER + ["SENSEX_VWAP_03"]
+
+
+def test_verified_strategy_disabled_by_user_stays_disabled(cfg):
+    store = Store(cfg.db_path)
+    store.set("disabled", ["SENSEX_HLBRK_66"])
+    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER[:5]
 
 
 def test_sweep_buffer():
