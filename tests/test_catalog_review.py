@@ -9,7 +9,8 @@ from sxpro.engine import Engine
 from sxpro.store import Store
 from sxpro.strategies import ALL_STRATEGIES, STRATEGY_MAP
 from sxpro.strategies.base import CE, PE
-from sxpro.strategies.catalog import InsideBarBreakout, sweep_buffer
+from sxpro.market import BEAR, BULL, NEUTRAL, SIDEWAYS
+from sxpro.strategies.catalog import InsideBarBreakout, SupertrendPullback, sweep_buffer
 from sxpro.strategies.tuning import DEFAULT_DENY_FLAG, RETIRED, VERIFIED_ORDER
 
 from .fakes import FakeKite, synthetic_candles
@@ -92,3 +93,29 @@ def test_inside_bar_stop_sits_half_atr_beyond_the_wick():
     dn = _row(90, 92, 70, 75, volume=200, ema9=97)
     sig = s.entry(_Ctx([dn, ib, mother, _row(100, 101, 99, 100, ema9=99)]))
     assert sig.direction == PE and sig.sl_price == pytest.approx(115 + 30)      # ib high + 0.5 x ATR
+
+
+class _StCtx:
+    """Minimal context for SUP_10: a bearish Supertrend (st 100) touched by a shooting star."""
+    def __init__(self, regime):
+        self.regime = regime
+        self.df = pd.DataFrame({"st_dir": [-1] * 13, "high": [99.0] * 13, "low": [80.0 + i for i in range(13)]})
+        self.rows = [pd.Series({"open": 95.0, "high": 100.0, "low": 93.5, "close": 94.0, "volume": 200.0,
+                                "st": 100.0, "st_dir": -1, "range": 6.5, "body": 1.0,
+                                "upper_wick": 5.0, "upper_wick_pct": 5 / 6.5,
+                                "lower_wick": 0.5, "lower_wick_pct": 0.5 / 6.5}),
+                     pd.Series({"volume": 100.0})]
+
+    def c(self, back=0):
+        return self.rows[back]
+
+    def swing_low(self, lookback, skip=1):
+        return float(self.df["low"].iloc[-lookback - skip:-skip].min())
+
+    swing_high = swing_low
+
+
+@pytest.mark.parametrize("regime,allowed", [(BEAR, True), (NEUTRAL, False), (SIDEWAYS, False), (BULL, False)])
+def test_supertrend_pe_needs_bearish_regime(regime, allowed):
+    sig = SupertrendPullback().entry(_StCtx(regime))
+    assert (sig is not None and sig.direction == PE) if allowed else sig is None

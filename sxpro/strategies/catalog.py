@@ -19,7 +19,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ..market import (SIDEWAYS, MarketContext, is_bear_engulfing, is_bear_pin, is_bull_engulfing,
+from ..market import (BEAR, BULL, SIDEWAYS, MarketContext, is_bear_engulfing, is_bear_pin, is_bull_engulfing,
                       is_bull_pin, is_doji, is_inside)
 from .base import BREAKOUT, CE, PE, REVERSAL, TREND, Signal, Strategy, sign
 
@@ -410,6 +410,10 @@ class SupertrendPullback(Strategy):
         elif c["st_dir"] == -1 and c["high"] >= st * 0.998 and c["close"] < st and is_bear_pin(c, 0.4):
             d = PE
         else:
+            return None
+        # strict regime gate: a Supertrend bounce only in a confirmed trend in its direction
+        # (CE needs BULLISH, PE needs BEARISH); NEUTRAL / SIDEWAYS chop is blocked
+        if ctx.regime != (BULL if d == CE else BEAR):
             return None
         swing = ctx.swing_high(12) if d == CE else ctx.swing_low(12)
         tgt = swing if sign(d) * (swing - c["close"]) > 0 else self.rr_target(c["close"], st, 2.0, d)
