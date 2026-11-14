@@ -111,8 +111,10 @@ class Engine:
     async def _log_notify(self, text: str) -> None:
         log.info("NOTIFY %s", text)
 
-    async def say(self, text: str) -> None:
-        level = "ERROR" if text.startswith(("❌", "🛑")) else "WARN" if text.startswith("⚠️") else "INFO"
+    async def say(self, text: str, level: Optional[str] = None) -> None:
+        """Send to Telegram and the Log tab; the Log level follows the leading emoji unless given."""
+        if level is None:
+            level = "ERROR" if text.startswith(("❌", "🛑")) else "WARN" if text.startswith("⚠️") else "INFO"
         self.sheet.log(self.mode, level, "telegram", text)
         if self._sender is not None and not self._sender.done():
             try:

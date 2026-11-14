@@ -40,7 +40,8 @@ async def amain() -> None:
     task = asyncio.create_task(engine.run())
     await stop.wait()
     task.cancel()
-    await engine.say("🛑 Bot stopping (container shutdown). Open positions are saved and resume on restart.")
+    await engine.say("🛑 Bot stopping (container shutdown). Open positions are saved and resume on restart.",
+                     level="INFO")  # routine 16:30 stop / redeploy, not an error
     await engine.drain_outbox()
     engine.sheet.status(engine.mode, "shutdown", engine.status_text())
     sheet_task.cancel()
