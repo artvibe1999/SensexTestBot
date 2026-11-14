@@ -78,6 +78,14 @@ class Config:
     # Premium points of expected stop-exit slippage: the cap-derived premium stop sits this
     # far above the exact cap level, so an exit that slips still stays within the loss cap.
     slippage_buffer_pts: float = field(default_factory=lambda: _float("SLIPPAGE_BUFFER_PTS", 2))
+    # Entry timing guards (0 = off). Extension: skip a signal when the last close is already
+    # more than k x ATR(14, 5m) beyond EMA21 in the trade direction. Run: skip when the last
+    # 30 minutes moved more than k x ATR in the trade direction. Pullback: do not buy at the
+    # signal close; wait up to ENTRY_PULLBACK_MIN minutes for SENSEX to retrace k x ATR, else drop.
+    entry_ext_max_atr: float = field(default_factory=lambda: _float("ENTRY_EXT_MAX_ATR", 0))
+    entry_run_max_atr: float = field(default_factory=lambda: _float("ENTRY_RUN_MAX_ATR", 0))
+    entry_pullback_atr: float = field(default_factory=lambda: _float("ENTRY_PULLBACK_ATR", 0))
+    entry_pullback_min: int = field(default_factory=lambda: _int("ENTRY_PULLBACK_MIN", 30))
 
     # Strike selection
     max_spread_pct: float = field(default_factory=lambda: _float("MAX_SPREAD_PCT", 0.01))

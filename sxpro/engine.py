@@ -70,6 +70,7 @@ class Engine:
         self.live = LiveBroker(kite, cfg)
         self.notify: Notifier = self._log_notify
         self.lock = asyncio.Lock()
+        self.pending: dict[str, dict] = {}  # sid -> waiting pullback entry
         self.positions: list[dict] = store.load_positions()
         self.ctx: Optional[MarketContext] = None
         self.last_candle_done: Optional[datetime] = None
@@ -263,6 +264,8 @@ class Engine:
         async with self.lock:
             await asyncio.to_thread(self.kite.refresh_instruments)
             await self.monitor(now)
+            if self.pending:
+                await self.check_pending(now)
             boundary = floor5(now)
             if (self.last_candle_done is None or boundary > self.last_candle_done) and \
                     now >= boundary + timedelta(seconds=self.cfg.candle_delay_seconds) and boundary.time() > MARKET_OPEN:
@@ -479,8 +482,93 @@ class Engine:
             if not self._reentry_ok(strat, sig, day):
                 continue
             signals.append((strat, sig))
+        signals = self._timing_guard(ctx, now, signals)
         if not signals:
             return
+        await self._place_ranked(ctx, now, mode, signals, capital, available)
+
+    # ------------------------------------------------------------ entry timing guards
+    @staticmethod
+    def _dir(direction: str) -> int:
+        return 1 if direction == CE else -1
+
+    def _timing_guard(self, ctx: MarketContext, now: datetime,
+                      signals: list[tuple[Strategy, Signal]]) -> list[tuple[Strategy, Signal]]:
+        """Drop over-extended signals; with pullback entry on, park the rest as pending."""
+        cfg, last = self.cfg, ctx.last
+        atr = float(last.get("atr", float("nan")))
+        if not atr or atr != atr or atr <= 0:
+            return signals
+        keep = []
+        for strat, sig in signals:
+            d = self._dir(sig.direction)
+            if cfg.entry_ext_max_atr > 0:
+                ext = (float(last["close"]) - float(last["ema21"])) * d / atr
+                if ext > cfg.entry_ext_max_atr:
+                    log.info("%s %s skipped: extended %.2f ATR from EMA21", strat.sid, sig.direction, ext)
+                    self.skip_note(f"extended > {cfg.entry_ext_max_atr} ATR")
+                    continue
+            if cfg.entry_run_max_atr > 0 and len(ctx.today) > 6:
+                run = (float(last["close"]) - float(ctx.today["close"].iloc[-7])) * d / atr
+                if run > cfg.entry_run_max_atr:
+                    log.info("%s %s skipped: 30-min run %.2f ATR", strat.sid, sig.direction, run)
+                    self.skip_note(f"30m run > {cfg.entry_run_max_atr} ATR")
+                    continue
+            keep.append((strat, sig))
+        if cfg.entry_pullback_atr <= 0:
+            return keep
+        for strat, sig in keep:
+            if strat.sid in self.pending:
+                continue
+            d = self._dir(sig.direction)
+            stop = sig.sl_price if sig.sl_price is not None else sig.sl_close
+            self.pending[strat.sid] = {
+                "strat": strat, "sig": sig, "d": d,
+                "level": float(last["close"]) - d * cfg.entry_pullback_atr * atr,
+                "stop": stop, "until": now + timedelta(minutes=cfg.entry_pullback_min)}
+        return []
+
+    def skip_note(self, why: str) -> None:
+        """Hook for the backtest's skip counter (no-op live)."""
+
+    async def check_pending(self, now: datetime) -> None:
+        """Every minute: enter a parked signal once SENSEX has pulled back to its level."""
+        ctx = self.ctx
+        if ctx is None or ctx.today_date != now.date():
+            self.pending.clear()
+            return
+        if now.time() > self.cfg.entry_cutoff or now.time() >= self.cfg.squareoff_time:
+            self.pending.clear()
+            return
+        spot = await asyncio.to_thread(self.kite.spot)
+        hit = []
+        for sid, p in list(self.pending.items()):
+            if now > p["until"]:
+                self.skip_note("pullback not reached")
+                del self.pending[sid]
+            elif p["stop"] is not None and (spot - p["stop"]) * p["d"] <= 0:
+                self.skip_note("stop broken before pullback")
+                del self.pending[sid]
+            elif (spot - p["level"]) * p["d"] <= 0:
+                hit.append((p["strat"], p["sig"]))
+                del self.pending[sid]
+        if not hit:
+            return
+        mode = self.mode
+        if self.store.get("paused", False):
+            return
+        if len([p for p in self.positions if p["mode"] == mode]) >= self.cfg.max_open_positions:
+            return
+        capital, available = await self.capital_info(mode)
+        ok, why = self.risk.can_open(mode, capital, now, self.unrealized(mode))
+        if not ok:
+            return
+        hit = [(s, g) for s, g in hit if self._reentry_ok(s, g, now.date().isoformat())]
+        if hit:
+            await self._place_ranked(ctx, now, mode, hit, capital, available)
+
+    async def _place_ranked(self, ctx: MarketContext, now: datetime, mode: str,
+                            signals: list[tuple[Strategy, Signal]], capital: float, available: float) -> None:
         # Rank every signal (verified set first, then market fit, then priority), then run the
         # full pre-trade check (expiry, strike in the strategy's delta / premium band with an
         # acceptable spread, configured lots within the available margin, per-trade loss cap)

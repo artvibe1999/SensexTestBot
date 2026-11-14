@@ -338,6 +338,7 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
             why = text.split("skipped:", 1)[-1].strip().split("(")[0].strip()
             skips[why] = skips.get(why, 0) + 1
     eng.notify = notify
+    eng.skip_note = lambda why: skips.__setitem__(why, skips.get(why, 0) + 1)
     return eng, store, kite, skips
 
 
