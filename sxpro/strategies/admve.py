@@ -10,6 +10,7 @@ from datetime import time
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 
 from .. import indicators as ind
 from ..liquidity import strategy_confluence
@@ -30,7 +31,13 @@ class AdaptiveDirectionalMomentum(Strategy):
     min_score = 75
 
     def entry(self, ctx) -> Optional[Signal]:
-        if ctx.n_today < 8 or ctx.df15 is None or len(ctx.df15) < 30:
+        if ctx.n_today < 8 or ctx.df15 is None:
+            return None
+        # Resampling 5m bars can leave the current 15m bucket partial. Use only
+        # 15m candles whose full 15-minute interval has closed.
+        last_5m_close = ctx.df.index[-1] + pd.Timedelta(minutes=5)
+        df15 = ctx.df15[ctx.df15.index + pd.Timedelta(minutes=15) <= last_5m_close]
+        if len(df15) < 30:
             return None
         d = ctx.df
         c, p = d.iloc[-1], d.iloc[-2]
@@ -46,8 +53,7 @@ class AdaptiveDirectionalMomentum(Strategy):
             return None
         atr_ratio = atr / float(atr_hist.median())
         rsi7 = float(ind.rsi(d["close"], 7).iloc[-1])
-        l15 = ctx.df15.iloc[-1]
-        prev15 = ctx.df15.iloc[-2]
+        l15 = df15.iloc[-1]
         bull15 = float(l15["ema9"]) > float(l15["ema21"]) and float(l15["plus_di"]) > float(l15["minus_di"])
         bear15 = float(l15["ema9"]) < float(l15["ema21"]) and float(l15["minus_di"]) > float(l15["plus_di"])
         adx_rising = float(c["adx"]) > float(p["adx"])
