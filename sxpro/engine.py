@@ -598,11 +598,11 @@ class Engine:
 
     async def _place_ranked(self, ctx: MarketContext, now: datetime, mode: str,
                             signals: list[tuple[Strategy, Signal]], capital: float, available: float) -> None:
-        # Rank every signal (verified set first, then market fit, then priority), then run the
-        # full pre-trade check (expiry, strike in the strategy's delta / premium band with an
-        # acceptable spread, configured lots within the available margin, per-trade loss cap)
-        # in that order and place the first that passes. A failed check or an order that
-        # provably did not fill falls through to the next candidate.
+        # ADMVE receives first evaluation priority, then the existing verified set; within
+        # each group rank by market fit, category-aware liquidity confluence and configured
+        # priority. Every candidate still passes the same full pre-trade checks (expiry,
+        # strike delta/premium/spread, available margin, sizing and per-trade loss cap).
+        # A failed check or an order that provably did not fill falls through to the next.
         ranked = []
         for strat, sig in signals:
             fit, fit_notes = self.market_fit(ctx, sig.direction)
@@ -632,9 +632,9 @@ class Engine:
             notes.append(f"{strat.sid} {sig.direction}: order not filled")
 
     def strategy_rank(self, strat: Strategy) -> tuple[int, float]:
-        """Order of the enabled strategies: the verified set (strategies/tuning.py VERIFIED_ORDER)
-        first in its listed order, then any other enabled strategy, e.g. one switched on with
-        /enable, by its tune / class priority."""
+        """ADMVE candidate first; then backtest-verified strategies in VERIFIED_ORDER;
+        remaining enabled strategies follow by configured/class priority. This is evaluation
+        order only and never overrides risk or execution checks."""
         if strat.sid == TOP_PRIORITY_SID:
             return 0, 0.0
         if strat.sid in VERIFIED_INDEX:
