@@ -70,21 +70,40 @@ def analyze_liquidity(ctx, futures_quote: dict | None = None) -> dict:
             zones.append(LiquidityZone(kind, float(value), 72.0, name))
     # Confirmed local swing candidates: only candles ending before the current bar.
     hist = df.iloc[:-1].tail(60)
+    swing_highs: list[float] = []
+    swing_lows: list[float] = []
     if len(hist) >= 5:
         highs = hist["high"].to_numpy(dtype=float)
         lows = hist["low"].to_numpy(dtype=float)
         for i in range(2, len(hist) - 2):
             if highs[i] >= max(highs[i - 2:i + 3]):
                 value = float(highs[i])
+                swing_highs.append(value)
                 if abs(value - price) <= 3.0 * atr:
                     zones.append(LiquidityZone("resistance", value, 55.0, "confirmed_swing_high"))
             if lows[i] <= min(lows[i - 2:i + 3]):
                 value = float(lows[i])
+                swing_lows.append(value)
                 if abs(value - price) <= 3.0 * atr:
                     zones.append(LiquidityZone("support", value, 55.0, "confirmed_swing_low"))
+    # Equal-high / equal-low pools require at least two confirmed pivots in an ATR-scaled band.
+    cluster_tol = max(0.10 * atr, 0.0005 * price)
+    for values, kind, source in ((swing_highs, "resistance", "equal_high_cluster"),
+                                 (swing_lows, "support", "equal_low_cluster")):
+        for i, level in enumerate(values):
+            matches = [v for v in values[:i] if abs(v - level) <= cluster_tol]
+            if matches and abs(level - price) <= 3.0 * atr:
+                zones.append(LiquidityZone(kind, float(np.mean(matches + [level])), 68.0, source))
 
     # Futures-volume proxy is carried on the SENSEX candle series by KiteService.
     session = ctx.today
+    if len(session) >= 6:
+        opening = session.iloc[:6]
+        opening_high, opening_low = float(opening["high"].max()), float(opening["low"].min())
+        if abs(opening_high - price) <= 3.0 * atr:
+            zones.append(LiquidityZone("resistance", opening_high, 62.0, "30m_opening_range_high"))
+        if abs(opening_low - price) <= 3.0 * atr:
+            zones.append(LiquidityZone("support", opening_low, 62.0, "30m_opening_range_low"))
     vol = session["volume"].astype(float).clip(lower=0)
     total_vol = float(vol.sum())
     profile_poc = None
