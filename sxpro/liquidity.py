@@ -32,21 +32,25 @@ def _depth_obi(snapshot: dict | None, levels: int = 5) -> float | None:
     """Top-of-book weighted imbalance in [-1, 1]; None for absent/invalid depth."""
     if not isinstance(snapshot, dict):
         return None
-    depth = snapshot.get("depth") or {}
-    bids, asks = depth.get("buy") or [], depth.get("sell") or []
-    if not bids or not asks:
+    try:
+        depth = snapshot.get("depth") or {}
+        bids, asks = depth.get("buy") or [], depth.get("sell") or []
+        if not bids or not asks:
+            return None
+        bid_qty = ask_qty = 0.0
+        for i, row in enumerate(bids[:levels]):
+            q = float(row.get("quantity") or 0)
+            if q > 0:
+                bid_qty += q / (i + 1)
+        for i, row in enumerate(asks[:levels]):
+            q = float(row.get("quantity") or 0)
+            if q > 0:
+                ask_qty += q / (i + 1)
+        total = bid_qty + ask_qty
+        return (bid_qty - ask_qty) / total if total > 0 else None
+    except (TypeError, ValueError, AttributeError):
+        # Malformed depth must degrade to "no depth evidence", not break candle processing.
         return None
-    bid_qty = ask_qty = 0.0
-    for i, row in enumerate(bids[:levels]):
-        q = float(row.get("quantity") or 0)
-        if q > 0:
-            bid_qty += q / (i + 1)
-    for i, row in enumerate(asks[:levels]):
-        q = float(row.get("quantity") or 0)
-        if q > 0:
-            ask_qty += q / (i + 1)
-    total = bid_qty + ask_qty
-    return (bid_qty - ask_qty) / total if total > 0 else None
 
 
 def analyze_liquidity(ctx, futures_quote: dict | None = None) -> dict:
