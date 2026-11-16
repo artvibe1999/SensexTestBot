@@ -396,9 +396,10 @@ class Engine:
             return pd.Series(series).sort_index()
 
         async def futures_depth():
-            if not self.kite.futures:
+            futures = getattr(self.kite, "futures", None) or []
+            if not futures:
                 return None
-            future = self.kite.futures[0]
+            future = futures[0]
             exchange = future.get("exchange") or "BFO"
             key = f"{exchange}:{future['tradingsymbol']}"
             q = await asyncio.to_thread(self.kite.quote, [key])
