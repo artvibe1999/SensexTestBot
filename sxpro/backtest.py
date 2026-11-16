@@ -38,6 +38,7 @@ from . import indicators as ind
 from .config import IST, Config
 from .kite_service import INDEX_SYMBOL
 from .market import MarketContext, classify_regime, resample_15
+from .liquidity import analyze_liquidity
 from .options import bs_price, years_to_expiry
 
 VIX_TOKEN = 264969
@@ -320,6 +321,10 @@ def _make_engine(data: Data, enabled: Optional[str], capital: float, lots, tmpdi
             ctx = MarketContext(df=df, now=now, prev_day={"open": p.open, "high": p.high, "low": p.low, "close": p.close},
                                 daily_adx=adx_v, nearest_expiry=exps[0] if exps else None, df15=df15, aux=aux)
             ctx.regime, ctx.regime_detail = classify_regime(ctx)
+            # Historical order-book snapshots are unavailable; backtests use only
+            # causal candle/volume-profile liquidity evidence and cannot award OBI points.
+            if "liquidity" in needs:
+                ctx.aux["liquidity"] = analyze_liquidity(ctx, None)
             return ctx
 
     eng = BTEngine(cfg, store, kite)
