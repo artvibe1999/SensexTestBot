@@ -30,8 +30,10 @@ from .strategies.tuning import DEFAULT_DENY_FLAG, VERIFIED_INDEX
 log = logging.getLogger(__name__)
 
 VIX_TOKEN = 264969      # NSE:INDIA VIX
-TOP_PRIORITY_SID = "SENSEX_ADMVE_80"
-ADMVE_DEFAULT_ENABLE_FLAG = "admve_default_enable_2026_11_16"
+# Strategies added to the catalog after the "known_strategies" record was introduced.
+# On the first boot with that record they are treated as new (switched off unless verified).
+KNOWN_STRATEGIES_KEY = "known_strategies"
+ADDED_WITH_KNOWN_RECORD = frozenset({"SENSEX_ADMVE_80"})
 NIFTY_TOKEN = 256265    # NSE:NIFTY 50
 # SENSEX heavyweights used for the advance/decline breadth feed (strategy 37).
 BREADTH_STOCKS = ["HDFCBANK", "ICICIBANK", "RELIANCE", "INFY", "BHARTIARTL", "LT", "ITC", "TCS", "AXISBANK",
@@ -100,21 +102,24 @@ class Engine:
         store.setdefault("lots_live", "auto")
         store.setdefault("paused", False)
         # default deny: everything outside the verified set starts disabled
-        unverified = {s.sid for s in ALL_STRATEGIES
-                      if s.sid not in VERIFIED_INDEX and s.sid != TOP_PRIORITY_SID}
+        all_sids = {s.sid for s in ALL_STRATEGIES}
+        unverified = {s.sid for s in ALL_STRATEGIES if s.sid not in VERIFIED_INDEX}
         store.setdefault("disabled", sorted(unverified))
         if not store.get(DEFAULT_DENY_FLAG):
             # one-time on an existing install: switch off every unverified strategy (a verified
             # one the user disabled stays disabled); later /enable choices are kept
             store.set("disabled", sorted(set(store.get("disabled", []) or []) | unverified))
             store.set(DEFAULT_DENY_FLAG, True)
-        # One-time migration: make the new ADMVE candidate available by default without
-        # calling it backtest-verified. Existing explicit choices for other strategies remain.
-        if not store.get(ADMVE_DEFAULT_ENABLE_FLAG):
-            disabled = set(store.get("disabled", []) or [])
-            disabled.discard(TOP_PRIORITY_SID)
-            store.set("disabled", sorted(disabled))
-            store.set(ADMVE_DEFAULT_ENABLE_FLAG, True)
+        # Default deny for strategies added to the catalog later (e.g. SENSEX_ADMVE_80): an
+        # existing install's "disabled" list does not name them, so without this they would
+        # start enabled. Every unverified strategy the bot has not seen before starts off;
+        # /enable choices made afterwards are kept.
+        known = store.get(KNOWN_STRATEGIES_KEY)
+        known = set(known) if known is not None else all_sids - ADDED_WITH_KNOWN_RECORD
+        new = (all_sids - known) & unverified
+        if new:
+            store.set("disabled", sorted(set(store.get("disabled", []) or []) | new))
+        store.set(KNOWN_STRATEGIES_KEY, sorted(all_sids | known))
         if store.get("paper_balance") is None:
             self.risk.set_paper_capital(cfg.default_paper_capital)
 
@@ -320,9 +325,6 @@ class Engine:
 
     def _needs(self) -> set[str]:
         needs = {n for s in self.enabled_strategies() for n in s.needs}
-        if self.enabled_strategies():
-            needs.add("liquidity")
-            needs.add("futures_depth")
         if any(s.tune.get("noise_k") is not None for s in self.enabled_strategies()):
             needs.add("noise")
         for p in self.positions:
@@ -599,17 +601,21 @@ class Engine:
 
     async def _place_ranked(self, ctx: MarketContext, now: datetime, mode: str,
                             signals: list[tuple[Strategy, Signal]], capital: float, available: float) -> None:
-        # ADMVE receives first evaluation priority, then the existing verified set; within
-        # each group rank by market fit, category-aware liquidity confluence and configured
-        # priority. Every candidate still passes the same full pre-trade checks (expiry,
-        # strike delta/premium/spread, available margin, sizing and per-trade loss cap).
-        # A failed check or an order that provably did not fill falls through to the next.
+        # Rank every signal (verified set first, then market fit, then priority), then run the
+        # full pre-trade check (expiry, strike in the strategy's delta / premium band with an
+        # acceptable spread, configured lots within the available margin, per-trade loss cap)
+        # in that order and place the first that passes. A failed check or an order that
+        # provably did not fill falls through to the next candidate. Liquidity confluence
+        # (only computed when an enabled strategy needs it) breaks ties among the
+        # non-verified strategies only, so the backtested order of the verified set is kept.
         ranked = []
         for strat, sig in signals:
             fit, fit_notes = self.market_fit(ctx, sig.direction)
             liq_fit, liq_notes = strategy_confluence(ctx.aux.get("liquidity"), sig.direction, strat.category)
             group, prio = self.strategy_rank(strat)
-            ranked.append(((group, -fit, -liq_fit, prio), strat, sig, fit, f"{fit_notes}; {liq_notes}"))
+            liq_key = -liq_fit if group else 0
+            ranked.append(((group, -fit, liq_key, prio), strat, sig, fit,
+                           f"{fit_notes}; {liq_notes}" if group else fit_notes))
         ranked.sort(key=lambda r: r[0])
         chains: dict = {}
         notes: list[str] = []
@@ -633,14 +639,12 @@ class Engine:
             notes.append(f"{strat.sid} {sig.direction}: order not filled")
 
     def strategy_rank(self, strat: Strategy) -> tuple[int, float]:
-        """ADMVE candidate first; then backtest-verified strategies in VERIFIED_ORDER;
-        remaining enabled strategies follow by configured/class priority. This is evaluation
-        order only and never overrides risk or execution checks."""
-        if strat.sid == TOP_PRIORITY_SID:
-            return 0, 0.0
+        """Order of the enabled strategies: the verified set (strategies/tuning.py VERIFIED_ORDER)
+        first in its listed order, then any other enabled strategy, e.g. one switched on with
+        /enable (ADMVE included), by its tune / class priority."""
         if strat.sid in VERIFIED_INDEX:
-            return 1, float(VERIFIED_INDEX[strat.sid])
-        return 2, float(strat.tune.get("priority", strat.priority))
+            return 0, float(VERIFIED_INDEX[strat.sid])
+        return 1, float(strat.tune.get("priority", strat.priority))
 
     @staticmethod
     def market_fit(ctx: MarketContext, direction: str) -> tuple[int, str]:

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -158,8 +157,8 @@ def analyze_liquidity(ctx, futures_quote: dict | None = None) -> dict:
     if resistance and abs(resistance.price - price) <= 0.75 * atr:
         score += 10.0
     score += 15.0 * profile_strength
-    if obi is not None:
-        score += 10.0 * abs(obi)
+    # Futures depth (OBI) is deliberately kept out of the score: backtests have no depth
+    # history, so a score that used it could not be reproduced. OBI only feeds ranking.
     if event != "none":
         score += 20.0
     score = float(min(100.0, max(0.0, score)))

@@ -2,10 +2,12 @@
 
 ## Status and safety
 
-ADMVE (strategy ID `SENSEX_ADMVE_80`) is a new research candidate. It is ranked first
-when multiple strategy signals are ready, but it is **not described as backtest-verified
-or profitable**. It is enabled by a one-time migration and runs in the existing default
-paper mode. Live mode still requires the existing Telegram live-mode confirmation.
+ADMVE (strategy ID `SENSEX_ADMVE_80`) is a research candidate and is **not
+backtest-verified**. It starts switched off: default deny covers it on fresh installs, and
+on existing installs the engine's `known_strategies` record switches off any unverified
+strategy it has not seen before (so a catalogue addition can never start trading by
+itself). Once switched on with `/enable ADMVE_80` it ranks after the verified set
+(`strategies/tuning.py` VERIFIED_ORDER), like any other strategy enabled later.
 
 Priority is not permission to trade. ADMVE must pass the same entry window, regime,
 re-entry, timing, option quote, delta, premium, spread, affordability, allocation,
@@ -32,9 +34,16 @@ risk-manager, order and exit checks as every other strategy. No signal is forced
   the existing engine's 1R/partial-book activation, momentum invalidation exit and the
   existing premium emergency stop and intraday square-off.
 
-The weighted evidence score is a deterministic filter, not a probability estimate.
-Its initial threshold and indicator parameters require walk-forward and paper-trading
-validation before any claim of edge.
+Score: every mandatory gate above must pass (worth a base of 70); optional evidence then
+adds ATR expansion (ATR >= 1.05 x median of the prior 20 bars) 10, relative volume >= 1.15
+5, room of at least 1 ATR to the nearest opposing liquidity level beyond price 10, and
+SENSEX breadth agreeing 5. The default threshold is 80 (`tune["min_score"]` overrides it).
+The score is a quality bar, not a probability estimate. The setup key is direction plus
+trigger kind (breakout / sweep / squeeze_breakout), and at most two entries a day, so a
+trigger cannot re-enter on every following bar.
+
+Note: the sideways path needs regime SIDEWAYS (ADX < 20) and ADX >= 18 and rising, so it
+only fires in that narrow band.
 
 ## Shared liquidity intelligence
 
@@ -56,8 +65,10 @@ a category-aware ranking tie-breaker for all existing strategies:
 Liquidity confluence is strategy-category aware: reversal strategies receive ranking
 support for a same-direction sweep/reclaim, breakout strategies for a same-direction
 breakout, and trend strategies for directional liquidity evidence. It only breaks ties
-after the existing strategy group and market-fit score; it never changes a strategy's
-entry rule or weakens risk checks.
+among the non-verified strategies, after market fit, and only while an enabled strategy
+needs the liquidity feed. The verified set keeps its backtested order. It never changes a
+strategy's entry rule or weakens risk checks. Futures depth (OBI) is not part of the
+liquidity score (no history for backtests); it can add one ranking point live only.
 
 ## Backtesting limitations and validation gate
 

@@ -14,15 +14,17 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
   sideways disables breakout strategies.
 * **80 strategy candidates**: 79 existing catalogue strategies (1–20 original, 21–60
   additional, 61–79 research) plus ADMVE (`SENSEX_ADMVE_80`, in
-  `sxpro/strategies/admve.py`). ADMVE is ranked first when signals compete, followed by
-  the existing verified set, market fit and category-aware liquidity confluence. This
-  ranking does not bypass entry, risk, strike-selection or execution checks. ADMVE is a
-  new research candidate, not yet backtest-verified or claimed profitable.
+  `sxpro/strategies/admve.py`). ADMVE is a research candidate, not verified: it starts
+  switched off (like every strategy outside the verified set, also on existing installs)
+  and, once switched on with `/enable ADMVE_80`, ranks after the verified set. When
+  signals compete: verified set first, then market fit, then (non-verified strategies
+  only) liquidity confluence, then priority. Ranking never bypasses entry, risk,
+  strike-selection or execution checks.
 * **Shared liquidity intelligence** (`sxpro/liquidity.py`) provides prior-day/pivot levels,
   confirmed swing and equal-high/low pools, opening range, approximate futures-volume
-  profile, sweep/reclaim events and optional futures depth imbalance. It adds
-  category-aware ranking confluence to all strategies without blindly imposing the same
-  entry filter on trend, breakout and reversal strategies. See
+  profile, sweep/reclaim events and optional futures depth imbalance. It is computed only
+  while a strategy that needs it (ADMVE) is enabled, and then breaks ranking ties among the
+  non-verified strategies; the backtested order of the verified set never changes. See
   [ADMVE and liquidity design](docs/admve_liquidity_engine.md).
 * **Extra feeds**, fetched only while a strategy that needs them is enabled: India VIX,
   NIFTY 50, advance/decline breadth, option-chain OI, the 09:15 1-minute candle, recent

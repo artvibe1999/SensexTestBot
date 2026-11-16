@@ -14,4 +14,4 @@ def test_admve_configuration_is_single_leg_intraday_candidate():
     assert strategy.delta_min < strategy.delta_target < strategy.delta_max
     assert strategy.end.hour == 14 and strategy.end.minute == 30
     assert strategy.time_exit.hour == 15 and strategy.time_exit.minute == 15
-    assert strategy.needs == ("liquidity",)
+    assert strategy.needs == ("liquidity", "futures_depth")

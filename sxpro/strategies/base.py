@@ -120,14 +120,15 @@ class Strategy:
         9/21 EMA must agree with the direction); adx_min / adx_max (5-min ADX bounds);
         min_stop_atr k (stop at least k x ATR(14) from entry); rr k (target = k x risk);
         no_target True; book f (book fraction f at target, trail the rest);
-        prem_sl p (premium stop -p); max_hold minutes (applied by the engine).
+        prem_sl p (premium stop -p); max_hold minutes (applied by the engine); min_score
+        (read by strategies that score their own signals, e.g. ADMVE).
         Trend-day gates from the 61-65 research: vwap_side True (price on the trade's side of
         VWAP); day_move x (move from the day open >= x in the trade's direction); noise_k k
         (price beyond open/prev-close x (1 +/- k x 14-day noise sigma), needs the noise feed);
         hold_close True (no target, hold to time_exit 15:20 / max_hold 330 unless set).
         """
         t = self.tune
-        if not t or set(t) <= {"priority", "max_hold", "time_exit"}:
+        if not t or set(t) <= {"priority", "max_hold", "time_exit", "min_score"}:
             return sig
         c = ctx.last
         price = float(c["close"])

@@ -24,10 +24,16 @@ class AdaptiveDirectionalMomentum(Strategy):
     prem_min, prem_max = 100, 900
     capital_pct = 0.10
     prem_sl_pct = 0.25
-    reentry = "setup"
+    reentry = "setup"                    # one entry per direction + trigger kind per day
+    max_entries = 2
     trail_kind = "price"
-    needs = ("liquidity",)
-    min_score = 75
+    needs = ("liquidity", "futures_depth")
+    # Score = 70 for passing every mandatory gate + optional evidence (max 100):
+    # ATR expansion 10, relative volume 5, room to the next opposing liquidity level 10,
+    # SENSEX breadth 5. 80 needs ATR expansion or room, or volume + breadth.
+    min_score = 80
+    BASE_SCORE = 70
+    OPTIONAL_WEIGHTS = {"atr_expansion": 10, "volume": 5, "room": 10, "breadth": 5}
 
     def entry(self, ctx) -> Optional[Signal]:
         if ctx.n_today < 8 or ctx.df15 is None:
@@ -90,55 +96,61 @@ class AdaptiveDirectionalMomentum(Strategy):
                          and close < float(prior8["low"].min()) and bear15 and vol_ok)
 
         if bull_trend:
-            direction = CE
-            trigger = bull_break or bull_sweep
-            directional = [bull_stack, above_vwap, float(c["adx"]) >= 22, adx_rising,
-                           float(c["plus_di"]) > float(c["minus_di"]), bull15, rsi7 >= 55,
-                           atr_ratio >= 1.05, bull_break or bull_sweep, vol_ok, liq_score >= 45]
+            direction, trigger_kind = CE, ("breakout" if bull_break else "sweep" if bull_sweep else None)
         elif bear_trend:
-            direction = PE
-            trigger = bear_break or bear_sweep
-            directional = [bear_stack, below_vwap, float(c["adx"]) >= 22, adx_rising,
-                           float(c["minus_di"]) > float(c["plus_di"]), bear15, rsi7 <= 45,
-                           atr_ratio >= 1.05, bear_break or bear_sweep, vol_ok, liq_score >= 45]
-        elif bull_sideways:
-            direction, trigger = CE, bull_break
-            directional = [above_vwap, float(c["adx"]) >= 18, adx_rising,
-                           float(c["plus_di"]) > float(c["minus_di"]), bull15, rsi7 >= 52,
-                           atr_ratio >= 1.05, bull_break, vol_ok, liq_score >= 45]
-        elif bear_sideways:
-            direction, trigger = PE, bear_break
-            directional = [below_vwap, float(c["adx"]) >= 18, adx_rising,
-                           float(c["minus_di"]) > float(c["plus_di"]), bear15, rsi7 <= 48,
-                           atr_ratio >= 1.05, bear_break, vol_ok, liq_score >= 45]
+            direction, trigger_kind = PE, ("breakout" if bear_break else "sweep" if bear_sweep else None)
+        elif bull_sideways and rsi7 >= 52:
+            direction, trigger_kind = CE, ("squeeze_breakout" if bull_break else None)
+        elif bear_sideways and rsi7 <= 48:
+            direction, trigger_kind = PE, ("squeeze_breakout" if bear_break else None)
         else:
             return None
-        if not trigger:
+        if trigger_kind is None:
             return None
 
-        # Weighted evidence score: a ranking/quality threshold, not a probability estimate.
-        score = 0
-        weights = [10, 10, 10, 5, 10, 10, 5, 8, 12, 5, 10]
-        for ok, weight in zip(directional, weights):
-            if ok:
-                score += weight
-        breadth = ctx.aux.get("breadth")
-        if breadth is not None and len(breadth.dropna()):
-            latest_breadth = float(breadth.dropna().iloc[-1])
-            if (direction == CE and latest_breadth >= 1.2) or (direction == PE and latest_breadth <= 0.8):
-                score += 5
-        if score < self.min_score:
+        # Every mandatory gate above passed; the score only counts optional evidence, so the
+        # threshold really filters (it is a quality bar, not a probability estimate).
+        evidence = {
+            "atr_expansion": atr_ratio >= 1.05,
+            "volume": vol_ok,
+            "room": self._room(liq, close, atr, direction) >= 1.0,
+            "breadth": self._breadth_agrees(ctx, direction),
+        }
+        score = self.BASE_SCORE + sum(self.OPTIONAL_WEIGHTS[k] for k, ok in evidence.items() if ok)
+        if score < float(self.tune.get("min_score", self.min_score)):
             return None
         stop = close - (1.5 * atr if direction == CE else -1.5 * atr)
         target = close + (2.0 * abs(close - stop) if direction == CE else -2.0 * abs(close - stop))
-        event = liq_event if liq_event != "none" else ("breakout" if trigger else "none")
-        key = f"ADMVE:{direction}:{event}:{ctx.df.index[-1].isoformat()}"
+        # Stable per-day setup key: with reentry="setup" the same trigger in the same direction
+        # cannot re-enter on every following bar (a timestamped key would allow that).
+        key = f"ADMVE:{direction}:{trigger_kind}"
+        passed = ",".join(k for k, ok in evidence.items() if ok) or "none"
         return Signal(direction, sl_price=stop, target=target, prem_sl_pct=self.prem_sl_pct,
                       setup_key=key,
-                      note=f"ADMVE score {score}/100; regime {ctx.regime}; ATR expansion {atr_ratio:.2f}; "
-                           f"liquidity {liq_score:.0f}; {event}",
-                      meta={"admve_score": score, "atr_ratio": atr_ratio, "liquidity_event": event,
-                            "liquidity_score": liq_score})
+                      note=f"ADMVE score {score}/100 ({passed}); regime {ctx.regime}; "
+                           f"ATR expansion {atr_ratio:.2f}; liquidity {liq_score:.0f}; {trigger_kind}",
+                      meta={"admve_score": score, "atr_ratio": atr_ratio, "liquidity_event": liq_event,
+                            "liquidity_score": liq_score, "trigger": trigger_kind})
+
+    @staticmethod
+    def _room(liq: dict, close: float, atr: float, direction: str) -> float:
+        """Distance in ATR to the nearest opposing liquidity level strictly beyond price
+        (resistance above for CE, support below for PE); inf when none is known."""
+        if direction == CE:
+            levels = [z["price"] for z in liq.get("zones") or []
+                      if z.get("kind") == "resistance" and z["price"] > close]
+            return (min(levels) - close) / atr if levels else float("inf")
+        levels = [z["price"] for z in liq.get("zones") or []
+                  if z.get("kind") == "support" and z["price"] < close]
+        return (close - max(levels)) / atr if levels else float("inf")
+
+    @staticmethod
+    def _breadth_agrees(ctx, direction: str) -> bool:
+        breadth = ctx.aux.get("breadth")
+        if breadth is None or not len(breadth.dropna()):
+            return False
+        latest = float(breadth.dropna().iloc[-1])
+        return latest >= 1.2 if direction == CE else latest <= 0.8
 
     def exit_on_close(self, ctx, pos):
         c, d = ctx.last, pos["direction"]

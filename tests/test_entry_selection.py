@@ -1,6 +1,6 @@
 """Entry selection: every enabled strategy is checked, each signal gets the full pre-trade
 check (strike, lots, margin, loss cap), the best plan that passes is placed, and strategies
-enabled later rank after ADMVE and the verified set."""
+enabled later rank after the verified set."""
 import asyncio
 from datetime import time, timedelta
 
@@ -71,16 +71,16 @@ def _engine(cfg, monkeypatch, strategies, drift=0.0004, seed=7):
     return engine, fake, day, store, msgs
 
 
-def test_added_strategies_rank_after_admve_and_verified_six(cfg):
+def test_added_strategies_rank_after_verified_six(cfg):
     store = Store(cfg.db_path)
     keep = set(VERIFIED) | {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
     store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid not in keep])
     store.set(DEFAULT_DENY_FLAG, True)   # extras switched on with /enable after the default-deny clean-up
     engine = Engine(cfg, store, FakeKite(synthetic_candles(2), synthetic_candles(2).index[-1].date()))
     order = [s.sid for s in engine.enabled_strategies()]
-    assert order[:7] == ["SENSEX_ADMVE_80"] + VERIFIED
-    assert set(order[7:]) == {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
-    assert all(engine.strategy_rank(STRATEGY_MAP[s])[0] == 2 for s in order[7:])
+    assert order[:6] == VERIFIED
+    assert set(order[6:]) == {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
+    assert all(engine.strategy_rank(STRATEGY_MAP[s])[0] == 1 for s in order[6:])
 
 
 def test_failed_check_falls_through_to_next_strategy(cfg, monkeypatch):

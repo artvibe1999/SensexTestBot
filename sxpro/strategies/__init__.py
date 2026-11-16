@@ -1,9 +1,9 @@
 from .catalog import ALL_STRATEGIES, STRATEGY_MAP
 from .admve import AdaptiveDirectionalMomentum
 
-# ADMVE is a newly introduced research candidate. It is deliberately not labelled
-# backtest-verified; the engine gives it first evaluation priority while keeping every
-# pre-trade risk and execution guard intact.
+# ADMVE is a research candidate, deliberately not in the verified set: it starts disabled
+# (default deny, also on existing installs via Engine's known_strategies record) and ranks
+# after the verified set once enabled.
 ADMVE = AdaptiveDirectionalMomentum()
 ALL_STRATEGIES.append(ADMVE)
 STRATEGY_MAP[ADMVE.sid] = ADMVE
