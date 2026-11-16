@@ -17,6 +17,7 @@ from .charges import OrderLeg, formula_charges
 from .config import IST, MARKET_CLOSE, MARKET_OPEN, Config
 from .kite_service import INDEX_SYMBOL, OPT_EXCHANGE, KiteService, TokenError
 from .market import BEAR, BULL, MarketContext, build_context
+from .liquidity import analyze_liquidity, strategy_confluence
 from .options import StrikeCandidate, choose_expiry, option_delta, select_strike
 from .report import DailyReporter
 from .risk import RiskManager, SizeResult
@@ -29,6 +30,8 @@ from .strategies.tuning import DEFAULT_DENY_FLAG, VERIFIED_INDEX
 log = logging.getLogger(__name__)
 
 VIX_TOKEN = 264969      # NSE:INDIA VIX
+TOP_PRIORITY_SID = "SENSEX_ADMVE_80"
+ADMVE_DEFAULT_ENABLE_FLAG = "admve_default_enable_2026_11_16"
 NIFTY_TOKEN = 256265    # NSE:NIFTY 50
 # SENSEX heavyweights used for the advance/decline breadth feed (strategy 37).
 BREADTH_STOCKS = ["HDFCBANK", "ICICIBANK", "RELIANCE", "INFY", "BHARTIARTL", "LT", "ITC", "TCS", "AXISBANK",
@@ -97,13 +100,21 @@ class Engine:
         store.setdefault("lots_live", "auto")
         store.setdefault("paused", False)
         # default deny: everything outside the verified set starts disabled
-        unverified = {s.sid for s in ALL_STRATEGIES if s.sid not in VERIFIED_INDEX}
+        unverified = {s.sid for s in ALL_STRATEGIES
+                      if s.sid not in VERIFIED_INDEX and s.sid != TOP_PRIORITY_SID}
         store.setdefault("disabled", sorted(unverified))
         if not store.get(DEFAULT_DENY_FLAG):
             # one-time on an existing install: switch off every unverified strategy (a verified
             # one the user disabled stays disabled); later /enable choices are kept
             store.set("disabled", sorted(set(store.get("disabled", []) or []) | unverified))
             store.set(DEFAULT_DENY_FLAG, True)
+        # One-time migration: make the new ADMVE candidate available by default without
+        # calling it backtest-verified. Existing explicit choices for other strategies remain.
+        if not store.get(ADMVE_DEFAULT_ENABLE_FLAG):
+            disabled = set(store.get("disabled", []) or [])
+            disabled.discard(TOP_PRIORITY_SID)
+            store.set("disabled", sorted(disabled))
+            store.set(ADMVE_DEFAULT_ENABLE_FLAG, True)
         if store.get("paper_balance") is None:
             self.risk.set_paper_capital(cfg.default_paper_capital)
 
@@ -302,10 +313,16 @@ class Engine:
         exps = self.kite.expiries()
         nearest = exps[0] if exps else None
         aux = await self.aux_feeds(now, df, exps)
-        return build_context(df, now, prev, adx_v, nearest, aux)
+        ctx = build_context(df, now, prev, adx_v, nearest, aux)
+        if "liquidity" in aux:
+            ctx.aux["liquidity"] = analyze_liquidity(ctx, aux.get("futures_depth"))
+        return ctx
 
     def _needs(self) -> set[str]:
         needs = {n for s in self.enabled_strategies() for n in s.needs}
+        if self.enabled_strategies():
+            needs.add("liquidity")
+            needs.add("futures_depth")
         if any(s.tune.get("noise_k") is not None for s in self.enabled_strategies()):
             needs.add("noise")
         for p in self.positions:
@@ -378,6 +395,15 @@ class Engine:
             series[df.index[-1]] = adv / max(dec, 1)
             return pd.Series(series).sort_index()
 
+        async def futures_depth():
+            if not self.kite.futures:
+                return None
+            future = self.kite.futures[0]
+            exchange = future.get("exchange") or "BFO"
+            key = f"{exchange}:{future['tradingsymbol']}"
+            q = await asyncio.to_thread(self.kite.quote, [key])
+            return q.get(key)
+
         async def oi():
             spot = float(df["close"].iloc[-1])
             rows = self.kite.chain(exps[0], spot, 15)
@@ -390,7 +416,8 @@ class Engine:
             return out
 
         for name, fn in (("vix", vix), ("nifty", nifty), ("first_min", first_min), ("daily", daily),
-                         ("noise", noise), ("breadth", breadth), ("oi", oi)):
+                         ("noise", noise), ("breadth", breadth), ("oi", oi),
+                         ("futures_depth", futures_depth)):
             if name in needs and (name != "oi" or exps):
                 await feed(name, fn)
         # drop caches of earlier days
@@ -579,8 +606,9 @@ class Engine:
         ranked = []
         for strat, sig in signals:
             fit, fit_notes = self.market_fit(ctx, sig.direction)
+            liq_fit, liq_notes = strategy_confluence(ctx.aux.get("liquidity"), sig.direction, strat.category)
             group, prio = self.strategy_rank(strat)
-            ranked.append(((group, -fit, prio), strat, sig, fit, fit_notes))
+            ranked.append(((group, -fit, -liq_fit, prio), strat, sig, fit, f"{fit_notes}; {liq_notes}"))
         ranked.sort(key=lambda r: r[0])
         chains: dict = {}
         notes: list[str] = []
@@ -607,9 +635,11 @@ class Engine:
         """Order of the enabled strategies: the verified set (strategies/tuning.py VERIFIED_ORDER)
         first in its listed order, then any other enabled strategy, e.g. one switched on with
         /enable, by its tune / class priority."""
+        if strat.sid == TOP_PRIORITY_SID:
+            return 0, 0.0
         if strat.sid in VERIFIED_INDEX:
-            return 0, float(VERIFIED_INDEX[strat.sid])
-        return 1, float(strat.tune.get("priority", strat.priority))
+            return 1, float(VERIFIED_INDEX[strat.sid])
+        return 2, float(strat.tune.get("priority", strat.priority))
 
     @staticmethod
     def market_fit(ctx: MarketContext, direction: str) -> tuple[int, str]:
