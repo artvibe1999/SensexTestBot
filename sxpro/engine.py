@@ -314,7 +314,7 @@ class Engine:
         nearest = exps[0] if exps else None
         aux = await self.aux_feeds(now, df, exps)
         ctx = build_context(df, now, prev, adx_v, nearest, aux)
-        if "liquidity" in aux:
+        if "liquidity" in self._needs():
             ctx.aux["liquidity"] = analyze_liquidity(ctx, aux.get("futures_depth"))
         return ctx
 
