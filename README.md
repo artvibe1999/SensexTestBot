@@ -1,7 +1,7 @@
 # SENSEX PRO – paper/live options trading bot
 
 Single-leg SENSEX weekly options bot for Zerodha Kite Connect, implementing the
-framework and 60 strategies in [`docs/`](docs/). It's controlled from Telegram and
+framework, 79 existing catalogue strategies and the ADMVE candidate in [`docs/`](docs/). It's controlled from Telegram and
 runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login callback.
 
 ## What it does
@@ -12,16 +12,21 @@ runs as Docker containers: the bot itself, plus Caddy for the HTTPS Kite login c
 * **Regime engine** (framework §2): BULLISH / BEARISH / SIDEWAYS / NEUTRAL, computed on
   5-min and confirmed on 15-min. Bullish disables PUTs, bearish disables CALLs, and
   sideways disables breakout strategies.
-* **79 strategies**, all in `sxpro/strategies/catalog.py`: 1–20 (original), 21–60 (specs:
-  `docs/sensex_pro_additional_strategies_*.md`), 61–79 research (`docs/research_61_65.md`,
-  `docs/research_66_79.md`).
-  They are evaluated on every closed 5-min candle, each within its own time window. If
-  several strategies signal on the same candle, the first one in catalogue order wins
-  (so 1–20 take priority over 21–60).
-* **Extra feeds for 21–60**, fetched only while a strategy that needs them is enabled:
-  India VIX (27, 29), NIFTY 50 (60), advance/decline breadth of 15 SENSEX heavyweights
-  (37, built from one quote per candle), option-chain OI (39, 48), the 09:15 1-minute
-  candle (34) and recent daily candles (50, 59).
+* **80 strategy candidates**: 79 existing catalogue strategies (1–20 original, 21–60
+  additional, 61–79 research) plus ADMVE (`SENSEX_ADMVE_80`, in
+  `sxpro/strategies/admve.py`). ADMVE is ranked first when signals compete, followed by
+  the existing verified set, market fit and category-aware liquidity confluence. This
+  ranking does not bypass entry, risk, strike-selection or execution checks. ADMVE is a
+  new research candidate, not yet backtest-verified or claimed profitable.
+* **Shared liquidity intelligence** (`sxpro/liquidity.py`) provides prior-day/pivot levels,
+  confirmed swing and equal-high/low pools, opening range, approximate futures-volume
+  profile, sweep/reclaim events and optional futures depth imbalance. It adds
+  category-aware ranking confluence to all strategies without blindly imposing the same
+  entry filter on trend, breakout and reversal strategies. See
+  [ADMVE and liquidity design](docs/admve_liquidity_engine.md).
+* **Extra feeds**, fetched only while a strategy that needs them is enabled: India VIX,
+  NIFTY 50, advance/decline breadth, option-chain OI, the 09:15 1-minute candle, recent
+  daily candles and the nearest SENSEX futures depth snapshot for liquidity confluence.
 * **Strike selection** (framework §5):
   * Expiry follows each strategy's rule. On expiry day the bot rolls to next week,
     except SENSEX_0DTE_12, which trades the same-day expiry.
