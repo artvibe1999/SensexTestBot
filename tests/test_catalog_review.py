@@ -1,6 +1,5 @@
-"""2026-11-09 catalog review: default deny (only the verified six enabled on first boot and
-once on existing installs), 12 retired strategies flagged, ATR buffer on wick / pivot stops
-of strategies 02, 09, 23, 44."""
+"""Catalog review: default deny except the ADMVE candidate and six verified strategies;
+12 retired strategies flagged, ATR buffer on selected wick / pivot stops."""
 import pandas as pd
 import pytest
 
@@ -40,11 +39,12 @@ def test_retired_ids_exist_and_exclude_verified():
     assert not set(RETIRED) & set(VERIFIED_ORDER)
 
 
-def test_fresh_install_enables_only_verified_six(cfg):
+def test_fresh_install_enables_admve_and_verified_six(cfg):
     store = Store(cfg.db_path)
     eng = _engine(cfg, store)
-    assert _enabled(eng) == VERIFIED_ORDER and store.get(DEFAULT_DENY_FLAG)
-    assert len(store.get("disabled")) == len(ALL_STRATEGIES) - 6
+    expected = ["SENSEX_ADMVE_80"] + VERIFIED_ORDER
+    assert _enabled(eng) == expected and store.get(DEFAULT_DENY_FLAG)
+    assert len(store.get("disabled")) == len(ALL_STRATEGIES) - len(expected)
 
 
 def test_live_install_drops_extras_once_then_respects_enable(cfg):
@@ -53,15 +53,16 @@ def test_live_install_drops_extras_once_then_respects_enable(cfg):
     store = Store(cfg.db_path)
     keep = set(VERIFIED_ORDER) | set(LIVE_EXTRAS)
     store.set("disabled", sorted(s.sid for s in ALL_STRATEGIES if s.sid not in keep))   # flag not set
-    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER
+    expected = ["SENSEX_ADMVE_80"] + VERIFIED_ORDER
+    assert _enabled(_engine(cfg, store)) == expected
     store.set("disabled", sorted(set(store.get("disabled")) - {"SENSEX_VWAP_03"}))      # /enable 03
-    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER + ["SENSEX_VWAP_03"]
+    assert _enabled(_engine(cfg, store)) == expected + ["SENSEX_VWAP_03"]
 
 
 def test_verified_strategy_disabled_by_user_stays_disabled(cfg):
     store = Store(cfg.db_path)
     store.set("disabled", ["SENSEX_HLBRK_66"])
-    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER[:5]
+    assert _enabled(_engine(cfg, store)) == ["SENSEX_ADMVE_80"] + VERIFIED_ORDER[:5]
 
 
 def test_sweep_buffer():
