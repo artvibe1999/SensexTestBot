@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 
 from .. import indicators as ind
-from ..liquidity import strategy_confluence
 from ..market import BEAR, BULL, SIDEWAYS
 from .base import CE, PE, TREND, Signal, Strategy
 
