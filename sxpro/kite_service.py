@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 import pandas as pd
+import requests
 from kiteconnect import KiteConnect
 from kiteconnect import exceptions as kex
 
@@ -25,6 +26,16 @@ OPT_EXCHANGE = "BFO"
 
 class TokenError(RuntimeError):
     pass
+
+
+# Network hiccups talking to api.kite.trade (slow reply, dropped connection). Safe to retry for
+# read-only calls such as quotes; never retried for order placement.
+TRANSIENT_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError, kex.NetworkException)
+QUOTE_RETRY_DELAY_S = 1.0
+
+
+def is_transient(exc: BaseException) -> bool:
+    return isinstance(exc, TRANSIENT_ERRORS)
 
 
 class _Throttle:
@@ -239,8 +250,17 @@ class KiteService:
     def quote(self, keys: list[str]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for i in range(0, len(keys), 400):
-            out.update(self._call(self._quote, self.kite.quote, keys[i:i + 400]))
+            out.update(self._quote_batch(keys[i:i + 400]))
         return out
+
+    def _quote_batch(self, keys: list[str]) -> dict[str, Any]:
+        """One quote request, retried once if Kite times out or drops the connection."""
+        try:
+            return self._call(self._quote, self.kite.quote, keys)
+        except TRANSIENT_ERRORS as exc:
+            log.warning("quote failed (%s); retrying once", exc)
+            _time.sleep(QUOTE_RETRY_DELAY_S)
+            return self._call(self._quote, self.kite.quote, keys)
 
     def spot(self) -> float:
         q = self.quote([INDEX_SYMBOL])

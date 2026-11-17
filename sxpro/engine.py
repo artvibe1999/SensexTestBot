@@ -15,7 +15,7 @@ from . import indicators as ind
 from .brokers import FlatPosition, LiveBroker, OrderState, PaperBroker
 from .charges import OrderLeg, formula_charges
 from .config import IST, MARKET_CLOSE, MARKET_OPEN, Config
-from .kite_service import INDEX_SYMBOL, OPT_EXCHANGE, KiteService, TokenError
+from .kite_service import INDEX_SYMBOL, OPT_EXCHANGE, KiteService, TokenError, is_transient
 from .market import BEAR, BULL, MarketContext, build_context
 from .liquidity import analyze_liquidity, strategy_confluence
 from .options import StrikeCandidate, choose_expiry, option_delta, select_strike
@@ -30,6 +30,7 @@ from .strategies.tuning import DEFAULT_DENY_FLAG, VERIFIED_INDEX
 log = logging.getLogger(__name__)
 
 VIX_TOKEN = 264969      # NSE:INDIA VIX
+NET_FAIL_ALERT_AFTER = 3  # Telegram alert once this many ticks in a row fail on Kite network errors
 # Strategies added to the catalog after the "known_strategies" record was introduced.
 # On the first boot with that record they are treated as new (switched off unless verified).
 KNOWN_STRATEGIES_KEY = "known_strategies"
@@ -88,6 +89,7 @@ class Engine:
         self._last_stop_check = datetime.min.replace(tzinfo=IST)
         self._last_3m: Optional[datetime] = None
         self.last_error: str = ""
+        self._net_fail_streak = 0  # consecutive ticks lost to Kite network errors
         self.sheet = SheetLogger(cfg.sheets_webhook_url, cfg.sheets_secret,
                                  cfg.google_sheet_id, cfg.google_sa_json)
         self.reporter = DailyReporter(cfg, kite, store, self.risk, self.sheet)
@@ -217,10 +219,30 @@ class Engine:
             except TokenError as exc:
                 await self.say_throttled("token", f"⚠️ Kite session expired/invalid ({exc}). Use /login to re-authenticate.", 60)
             except Exception as exc:
-                self.last_error = f"{datetime.now(IST):%H:%M:%S} {exc}"
-                log.exception("tick failed")
-                await self.say_throttled("tick-error", f"⚠️ Engine error: {exc}", 15)
+                await self.on_tick_error(exc)
+            else:
+                await self.on_tick_ok()
             await asyncio.sleep(self.cfg.poll_seconds)
+
+    async def on_tick_error(self, exc: Exception) -> None:
+        """A single Kite network blip (already retried inside the quote call) is only logged;
+        Telegram is told once it repeats NET_FAIL_ALERT_AFTER ticks in a row. Other errors
+        alert straight away."""
+        self.last_error = f"{datetime.now(IST):%H:%M:%S} {exc}"
+        if is_transient(exc):
+            self._net_fail_streak += 1
+            log.warning("tick failed on Kite network error (%d in a row): %s", self._net_fail_streak, exc)
+            if self._net_fail_streak == NET_FAIL_ALERT_AFTER:
+                await self.say_throttled("tick-error", f"⚠️ Kite not responding ({self._net_fail_streak} checks "
+                                                       f"in a row failed): {exc}", 15)
+            return
+        log.exception("tick failed")
+        await self.say_throttled("tick-error", f"⚠️ Engine error: {exc}", 15)
+
+    async def on_tick_ok(self) -> None:
+        if self._net_fail_streak >= NET_FAIL_ALERT_AFTER:
+            await self.say("✅ Kite connection recovered.")
+        self._net_fail_streak = 0
 
     async def startup(self) -> None:
         ok = await asyncio.to_thread(self.kite.load_saved_token)
