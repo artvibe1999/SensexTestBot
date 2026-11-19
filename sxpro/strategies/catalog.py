@@ -503,7 +503,7 @@ class ExpiryGammaScalp(Strategy):
 # 13 --------------------------------------------------------------------------
 class WmaCrossScalp(Strategy):
     sid, name, category = "SENSEX_WMA_13", "Weighted MA Crossover Scalp", TREND
-    start, end, time_exit, max_hold_min = time(9, 35), time(15, 10), time(15, 15), 20
+    start, end, time_exit, max_hold_min = time(9, 35), time(15, 10), time(15, 15), 90
     delta_target, delta_min, delta_max = 0.60, 0.53, 0.67
     prem_min, prem_max = 300, 500
     reentry = "yes"
@@ -1349,6 +1349,7 @@ class FractalBreakout35(Spec):
     reentry, trail = "setup", "ema21"
 
     def entry(self, ctx):
+        if ctx.regime == "BEARISH": return None  # FRACTAL_35: 33% hit in BEARISH
         df = ctx.df.tail(30)
         c, p = ctx.c(0), ctx.c(1)
         price = float(c["close"])
@@ -1916,6 +1917,7 @@ class DoubleLiquidity52(Spec):
     trail = "ema9"
 
     def entry(self, ctx):
+        if ctx.regime == "NEUTRAL": return None  # DBL_LIQ_52: 33% hit in NEUTRAL
         df = ctx.df.tail(40)
         c, p = ctx.c(0), ctx.c(1)
         price = float(c["close"])
@@ -2379,6 +2381,7 @@ class LateMomentum63(Research):
 
     def entry(self, ctx):
         if ctx.regime == "BULLISH": return None  # LATEMOM_63: 0% hit in BULLISH
+        if ctx.regime == "BEARISH": return None  # LATEMOM_63: 33% hit in BEARISH
         c = ctx.last
         price = float(c["close"])
         ret = price / float(ctx.today["open"].iloc[0]) - 1
@@ -2419,6 +2422,7 @@ class OpeningRange30_65(Research):
     trail_mult = 3.0
 
     def entry(self, ctx):
+        if ctx.regime == "BEARISH": return None  # ORB30_65: 33% hit in BEARISH
         t = ctx.today
         if len(t) < 7:
             return None
@@ -2477,6 +2481,7 @@ class NewExtreme66(VwapExit, Research):
     # trail removed: VwapExit handles the exit signal
 
     def entry(self, ctx):
+        if ctx.regime == "BULLISH": return None  # HLBRK_66: 33% hit in BULLISH
         b = bands(ctx, self.k)
         if b is None or ctx.n_today < 3:
             return None
@@ -2513,6 +2518,10 @@ class Midday67(Research):
 class Midday68(Midday67):
     sid, name = "SENSEX_MIDDAY_68", "12:30 Noise-Band Momentum"
     start = end = time(12, 30)
+
+    def entry(self, ctx):
+        if ctx.regime == "BULLISH": return None  # MIDDAY_68: 33% hit in BULLISH
+        return super().entry(ctx)
 
 
 class OpenDrive69(Research):
