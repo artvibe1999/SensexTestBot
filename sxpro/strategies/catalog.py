@@ -2327,6 +2327,8 @@ class NoiseMomentum61(Research):
     start, end = time(9, 45), time(14, 15)
     needs = ("noise",)
     k = 1.25
+    max_hold_min = 45       # option premium peaks ~24 min from entry; exit before decay
+    trail_mult = 0.5        # chandelier: MFE - 0.5*open_atr before full reversal
 
     def entry(self, ctx):
         t = ctx.close_time
@@ -2372,6 +2374,7 @@ class LateMomentum63(Research):
     sid, name = "SENSEX_LATEMOM_63", "Late-Session Momentum"
     start, end = time(14, 0), time(14, 0)
     thr = 0.006
+    trail_mult = 0.5        # protect gains after 14:50 premium peak
 
     def entry(self, ctx):
         c = ctx.last
@@ -2468,6 +2471,8 @@ class NewExtreme66(VwapExit, Research):
     start, end = time(11, 0), time(14, 30)
     needs = ("noise",)
     k = 1.0
+    max_hold_min = 120      # option premium peaks ~72 min from entry
+    trail_mult = 0.5        # chandelier check before VWAP-cross exit
 
     def entry(self, ctx):
         b = bands(ctx, self.k)
@@ -2579,6 +2584,8 @@ class InsideDayBreak71(Research):
     buf = 0.1
 
     def entry(self, ctx):
+        if ctx.regime == "NEUTRAL":          # 0% hit in NEUTRAL (data-verified)
+            return None
         d = ctx.aux.get("daily")
         if d is None or len(d) < 2:
             return None
@@ -2645,6 +2652,8 @@ class Orb60_74(Research):
     sid, name = "SENSEX_ORB60_74", "60-min Opening Range Breakout"
     category = BREAKOUT
     start, end = time(10, 20), time(13, 30)
+    max_hold_min = 75       # option premium peaks ~42 min from entry; 75 min cap
+    trail_mult = 0.5        # chandelier guard: MFE - 0.5*open_atr
 
     def entry(self, ctx):
         t = ctx.today
@@ -2665,7 +2674,8 @@ class ThreeDayBreak75(Research):
     category = BREAKOUT
     start, end = time(9, 30), time(14, 0)
     needs = ("daily",)
-    trail_mult = 3.0
+    trail_mult = 1.0        # tightened from 3.0: fires at MFE-200pts vs MFE-600pts
+    max_hold_min = 75       # option premium peaks ~34 min from entry
     n = 3
 
     def entry(self, ctx):
