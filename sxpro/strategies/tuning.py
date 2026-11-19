@@ -14,8 +14,25 @@ import json
 import os
 
 VERIFIED_ORDER: list[str] = [
+    # Original 6 verified strategies
     "SENSEX_NOISE_61", "SENSEX_ORB60_74", "SENSEX_INSIDE_71",
     "SENSEX_3DAY_75", "SENSEX_LATEMOM_63", "SENSEX_HLBRK_66",
+    # Data-verified additions from 28-day GCS archive analysis (2026-11-20)
+    "SENSEX_FRACTAL_BRK_35",
+    "SENSEX_VBOL_79",
+    "SENSEX_ORB30_65",
+    "SENSEX_MTF_ALIGN_55",
+    "SENSEX_FIRST30_77",
+    "SENSEX_ODRIVE_69",
+    "SENSEX_LUNCH_73",
+    "SENSEX_PDB_64",
+    "SENSEX_VWAPPB_70",
+    "SENSEX_VBO_62",
+    "SENSEX_HDIV_47",
+    "SENSEX_THRUST_72",
+    "SENSEX_MIDDAY_68",
+    "SENSEX_MIDDAY_67",
+    "SENSEX_CLOSESTR_76",
 ]
 VERIFIED_INDEX: dict[str, int] = {sid: i + 1 for i, sid in enumerate(VERIFIED_ORDER)}
 
