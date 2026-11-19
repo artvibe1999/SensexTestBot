@@ -2331,6 +2331,7 @@ class NoiseMomentum61(Research):
     # trail removed: 0.5*ATR fires within first bar on wide-range SENSEX moves
 
     def entry(self, ctx):
+        if ctx.regime == "BEARISH": return None  # NOISE_61: 0% hit in BEARISH
         t = ctx.close_time
         if (t.hour * 60 + t.minute - (9 * 60 + 45)) % 30 != 0:
             return None
@@ -2377,6 +2378,7 @@ class LateMomentum63(Research):
     # trail removed: not needed for late entries near 15:20
 
     def entry(self, ctx):
+        if ctx.regime == "BULLISH": return None  # LATEMOM_63: 0% hit in BULLISH
         c = ctx.last
         price = float(c["close"])
         ret = price / float(ctx.today["open"].iloc[0]) - 1
@@ -2656,6 +2658,7 @@ class Orb60_74(Research):
     # trail removed: 0.5*ATR too tight for SENSEX; 15:20 exit captures avg +137pts
 
     def entry(self, ctx):
+        if ctx.regime == "BULLISH": return None  # ORB60_74: 14% hit in BULLISH
         t = ctx.today
         if len(t) < 13:
             return None
