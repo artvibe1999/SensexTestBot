@@ -38,7 +38,7 @@ def implied_vol(price: float, spot: float, strike: float, t: float, r: float, is
     intrinsic = max(0.0, spot - strike) if is_call else max(0.0, strike - spot)
     if price <= intrinsic or t <= 0:
         return None
-    lo, hi = 0.01, 3.0
+    lo, hi = 0.01, 5.0  # 500% cap: handles extreme-event IV spikes in SENSEX options
     for _ in range(80):
         mid = (lo + hi) / 2
         if bs_price(spot, strike, t, r, mid, is_call) > price:

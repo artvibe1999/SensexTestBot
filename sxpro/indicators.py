@@ -18,7 +18,13 @@ def sma(s: pd.Series, n: int) -> pd.Series:
 
 def wma(s: pd.Series, n: int) -> pd.Series:
     w = np.arange(1, n + 1, dtype=float)
-    return s.rolling(n, min_periods=n).apply(lambda x: float(np.dot(x, w) / w.sum()), raw=True)
+    w /= w.sum()
+    # np.convolve is ~10x faster than rolling().apply() with a Python callable
+    arr = s.to_numpy(dtype=float)
+    out = np.full(len(arr), np.nan)
+    if len(arr) >= n:
+        out[n - 1:] = np.convolve(arr, w[::-1], mode="full")[n - 1: len(arr)]
+    return pd.Series(out, index=s.index, dtype=float)
 
 
 def true_range(df: pd.DataFrame) -> pd.Series:

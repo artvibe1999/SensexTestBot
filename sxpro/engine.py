@@ -29,6 +29,14 @@ from .strategies.tuning import DEFAULT_DENY_FLAG, VERIFIED_INDEX
 
 log = logging.getLogger(__name__)
 
+
+def _ts_str(ts) -> str:
+    """Normalise Kite order_timestamp (datetime or string) to 'YYYY-MM-DD HH:MM:SS'."""
+    if isinstance(ts, datetime):
+        return ts.strftime("%Y-%m-%d %H:%M:%S")
+    return str(ts or "")[:19].replace("T", " ")
+
+
 VIX_TOKEN = 264969      # NSE:INDIA VIX
 NET_FAIL_ALERT_AFTER = 3  # Telegram alert once this many ticks in a row fail on Kite network errors
 # Strategies added to the catalog after the "known_strategies" record was introduced.
@@ -272,6 +280,9 @@ class Engine:
         if key in self._jobs_done:
             return False
         self._jobs_done.add(key)
+        # Prune previous-day entries so the set stays small over multi-day runs
+        today = str(now.date())
+        self._jobs_done = {k for k in self._jobs_done if k.endswith(today)}
         return True
 
     async def tick(self, now: datetime) -> None:
@@ -1054,7 +1065,7 @@ class Engine:
         try:
             orders = await asyncio.to_thread(self.kite.orders)
             sells = [o for o in orders if o.get("tradingsymbol") == pos["symbol"] and o.get("status") == "COMPLETE"
-                     and o.get("transaction_type") == "SELL" and str(o.get("order_timestamp")) >= pos["entry_time"][:19].replace("T", " ")]
+                     and o.get("transaction_type") == "SELL" and _ts_str(o.get("order_timestamp")) >= pos["entry_time"][:19].replace("T", " ")]
             q = sum(int(o["filled_quantity"]) for o in sells)
             if q:
                 price = sum(int(o["filled_quantity"]) * float(o["average_price"]) for o in sells) / q

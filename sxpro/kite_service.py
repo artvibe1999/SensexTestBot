@@ -73,9 +73,12 @@ class KiteService:
 
     def _save_token(self, token: str) -> None:
         os.makedirs(self.cfg.data_dir, exist_ok=True)
-        fd = os.open(self.cfg.token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # Write to a temp file then atomically rename so a crash never leaves an empty token file
+        tmp_path = self.cfg.token_path + ".tmp"
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump({"access_token": token, "saved_at": datetime.now(IST).isoformat()}, fh)
+        os.replace(tmp_path, self.cfg.token_path)
         try:
             os.chmod(self.cfg.token_path, 0o600)  # tighten a file created by an older version
         except OSError:
