@@ -12,6 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, filters
 from .config import IST, Config
 from .engine import Engine, fmt_money
 from .strategies import ALL_STRATEGIES, STRATEGY_MAP
+from .strategies import MANUAL_ONLY
 from .strategies.tuning import RETIRED
 
 log = logging.getLogger(__name__)
@@ -226,10 +227,12 @@ class TelegramController:
             return
         target = ctx.args[0].lower()
         if target == "paper":
+            was = e.mode
             e.store.set("mode", "paper")
             self._live_confirm_until = None
             self._event("mode change", "paper")
-            await self.reply(update, "📝 Switched to PAPER trading. Open live positions (if any) stay managed.")
+            note = e.disarm_on_mode_change() if was != "paper" else ""
+            await self.reply(update, "📝 Switched to PAPER trading. Open live positions (if any) stay managed." + note)
         elif target == "live":
             if not e.kite.ready:
                 await self.reply(update, "Kite not logged in — /login first.")
@@ -252,9 +255,11 @@ class TelegramController:
             await self.reply(update, "No pending live switch. Send /mode live first.")
             return
         self._live_confirm_until = None
+        was = self.engine.mode
         self.engine.store.set("mode", "live")
         self._event("mode change", "live")
-        await self.reply(update, "🔴 LIVE trading enabled. New entries will place real orders. /mode paper to revert.")
+        note = self.engine.disarm_on_mode_change() if was != "live" else ""
+        await self.reply(update, "🔴 LIVE trading enabled. New entries will place real orders. /mode paper to revert." + note)
 
     async def cmd_lots(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         e = self.engine
@@ -326,7 +331,8 @@ class TelegramController:
         disabled = set(self.engine.store.get("disabled", []))
         arg = ctx.args[0].upper()
         if arg == "ALL":
-            ids = [s.sid for s in ALL_STRATEGIES]
+            # manual-only strategies (SPIKE_22) are never armed by "/enable all"
+            ids = [s.sid for s in ALL_STRATEGIES if not (enable and s.sid in MANUAL_ONLY)]
         else:
             match = [sid for sid in STRATEGY_MAP if sid == arg or sid.endswith("_" + arg) or arg in sid]
             if len(match) != 1:
@@ -335,6 +341,13 @@ class TelegramController:
             ids = match
         disabled = disabled - set(ids) if enable else disabled | set(ids)
         self.engine.store.set("disabled", sorted(disabled))
+        spike_note = ""
+        for sid in set(ids) & MANUAL_ONLY:
+            self.engine.arm_spike(enable)
+            if enable:
+                spike_note = (f"\n🎯 {sid} armed for ONE {self.engine.mode.upper()} trade (09:15:20-09:30 premium "
+                              f"spike). It disables itself after that trade's exit; a /mode switch or a bot "
+                              f"restart disarms it.\n")
         self._event("strategies", f"{'enabled' if enable else 'disabled'} {', '.join(ids)}")
         order = self.engine.enabled_strategies()
         lines = [f"{i}. {s.sid}" + ("" if self.engine.strategy_rank(s)[0] == 0 else "  (added, after the verified set)")
@@ -343,7 +356,7 @@ class TelegramController:
         retired = [sid for sid in ids if sid in RETIRED] if enable else []
         warn = (f"⚠️ Retired in the 2026-11-09 review (structurally weak): {', '.join(retired)}\n"
                 if retired else "")
-        await self.reply(update, warn + f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
+        await self.reply(update, warn + spike_note + f"{'Enabled' if enable else 'Disabled'}: {', '.join(ids)}\n"
                                  f"Priority order ({len(order)} enabled). When several signal on one candle, "
                                  f"each group is checked best market fit first:\n" + "\n".join(lines) + more)
 

@@ -24,6 +24,9 @@ from .risk import RiskManager, SizeResult
 from .sheets import SheetLogger
 from .store import Store
 from .strategies import ALL_STRATEGIES, STRATEGY_MAP, apply_selection_overrides
+from .strategies import MANUAL_ONLY
+from .spike import SpikeContract, SpikeDetector, SpikeTrigger
+from .spike_feed import SpikeFeed
 from .strategies.base import CE, Signal, Strategy, sign, trend15_agrees, vwap_side_agrees
 from .strategies.tuning import DEFAULT_DENY_FLAG, VERIFIED_INDEX
 
@@ -37,6 +40,9 @@ def _ts_str(ts) -> str:
     return str(ts or "")[:19].replace("T", " ")
 
 
+SPIKE_SID = "SENSEX_SPIKE_22"
+SPIKE_PREP = time(9, 13)   # arm the opening-spike detector / WebSocket before the bell
+SPIKE_STRIKES = 1500       # stream nearest-expiry strikes within this many points of spot
 VIX_TOKEN = 264969      # NSE:INDIA VIX
 NET_FAIL_ALERT_AFTER = 3  # Telegram alert once this many ticks in a row fail on Kite network errors
 # Strategies added to the catalog after the "known_strategies" record was introduced.
@@ -62,6 +68,15 @@ class EntryPlan:
     lot_size: int
     fit: int = 0          # market-fit points (0-3), see Engine.market_fit
     fit_notes: str = ""
+
+
+class _SpikeCtx:
+    """The few MarketContext fields execute_entry reads, for a tick-driven entry before any candle."""
+
+    def __init__(self, now: datetime, spot: float, regime: str):
+        self.df = type("D", (), {"index": [now.replace(microsecond=0)]})()
+        self.last = {"close": spot}
+        self.regime = regime
 
 
 def floor5(ts: datetime) -> datetime:
@@ -132,6 +147,44 @@ class Engine:
         store.set(KNOWN_STRATEGIES_KEY, sorted(all_sids | known))
         if store.get("paper_balance") is None:
             self.risk.set_paper_capital(cfg.default_paper_capital)
+        self._enforce_manual_only()
+        sp = STRATEGY_MAP.get(SPIKE_SID)
+        self.spike = SpikeDetector(sp.spike_pct, sp.spike_window_s, sp.start, sp.end, sp.spike_max_spread,
+                                   sp.spike_near_points, clock=lambda: self.clock()) if sp else None
+        self.spike_feed = SpikeFeed(cfg.kite_api_key)
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._spike_day: Optional[date] = None
+
+    # ------------------------------------------------------------ manual-only strategies (SPIKE_22)
+    def _enforce_manual_only(self) -> None:
+        """Manual-only strategies are off at every bot start: only Telegram arms them.
+        An open position of theirs is still managed to its exit."""
+        disabled = set(self.store.get("disabled", []) or [])
+        for sid in MANUAL_ONLY:
+            disabled.add(sid)
+            self.store.delete(f"armed_{sid}")
+        self.store.set("disabled", sorted(disabled))
+
+    def arm_spike(self, on: bool) -> None:
+        """Telegram /enable SPIKE_22 (on) or /disable SPIKE_22: arm for exactly one trade in the
+        current mode (the flag holds that mode; a /mode switch disarms it)."""
+        disabled = set(self.store.get("disabled", []) or [])
+        if on:
+            disabled.discard(SPIKE_SID)
+            self.store.set(f"armed_{SPIKE_SID}", self.mode)
+        else:
+            disabled.add(SPIKE_SID)
+            self.store.delete(f"armed_{SPIKE_SID}")
+        self.store.set("disabled", sorted(disabled))
+
+    def spike_armed(self) -> bool:
+        return self.store.get(f"armed_{SPIKE_SID}") == self.mode
+
+    def disarm_on_mode_change(self) -> str:
+        if not self.store.get(f"armed_{SPIKE_SID}"):
+            return ""
+        self.arm_spike(False)
+        return f"\n⛔ {SPIKE_SID} disarmed by the mode switch. /enable SPIKE_22 to arm it for this mode."
 
     # ------------------------------------------------------------ helpers
     async def _log_notify(self, text: str) -> None:
@@ -219,6 +272,9 @@ class Engine:
 
     # ------------------------------------------------------------ main loop
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        if self.spike is not None:
+            self.spike.on_trigger = self._spike_from_thread
         self._sender = asyncio.create_task(self._send_loop())
         await self.startup()
         while True:
@@ -309,6 +365,16 @@ class Engine:
 
         if not self.kite.ready:
             return
+        if self.spike is not None:
+            if weekday and SPIKE_PREP <= t <= self.spike.end:
+                try:
+                    await self.prepare_spike(now)
+                except TokenError:
+                    raise
+                except Exception:
+                    log.exception("spike detector setup failed")
+            elif self.spike_feed.running:
+                await asyncio.to_thread(self.spike_feed.stop)   # window over: free the WebSocket
         if not (weekday and MARKET_OPEN <= t <= MARKET_CLOSE):
             return
 
@@ -326,6 +392,145 @@ class Engine:
                 if (self._last_3m is None or b3 > self._last_3m) and now >= b3 + timedelta(seconds=4):
                     self._last_3m = b3
                     await self.update_3min_trails(now)
+
+    # ------------------------------------------------------------ tick-driven opening spike
+    async def prepare_spike(self, now: datetime) -> None:
+        """From 09:13: arm the detector and stream the nearest-expiry strikes around ATM."""
+        strat = STRATEGY_MAP[SPIKE_SID]
+        on = (strat.sid in {s.sid for s in self.enabled_strategies()} and not self.store.get("paused", False)
+              and self.spike_armed())
+        self.spike.enabled = on
+        if not on or self.spike.fired_today:
+            return
+        if self._spike_day == now.date() and self.spike_feed.running:
+            return
+        exps = [e for e in self.kite.expiries() if e >= now.date()]
+        if not exps:
+            return
+        spot = self.last_spot
+        if spot <= 0:
+            q = await asyncio.to_thread(self.kite.quote, [INDEX_SYMBOL])
+            spot = float((q.get(INDEX_SYMBOL) or {}).get("last_price") or 0.0)
+        if spot <= 0:
+            return
+        index_token = int(getattr(self.kite, "index_token", 265))
+        contracts = [SpikeContract(int(r["instrument_token"]), r["tradingsymbol"], float(r["strike"]),
+                                   r["instrument_type"], r["expiry"], int(r["lot_size"]),
+                                   float(r.get("tick_size") or 0.05))
+                     for r in self.kite.options
+                     if r["expiry"] == exps[0] and r["instrument_type"] in ("CE", "PE")
+                     and abs(float(r["strike"]) - spot) <= SPIKE_STRIKES]
+        self.spike.configure_day(now.date(), contracts, index_token)
+        token = getattr(getattr(self.kite, "kite", None), "access_token", None)
+        await asyncio.to_thread(self.spike_feed.start, token, [c.token for c in contracts] + [index_token],
+                                self.spike.on_ticks)
+        self._spike_day = now.date()
+
+    def _spike_from_thread(self, trig: SpikeTrigger) -> None:
+        """Called in the WebSocket thread: hand the trigger to the engine loop without blocking it."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self.on_spike(trig), self._loop)
+
+    async def on_spike(self, trig: SpikeTrigger) -> Optional[dict]:
+        strat = STRATEGY_MAP[SPIKE_SID]
+        c = trig.contract
+        async with self.lock:
+            mode = self.mode
+            now = self.clock()
+            day = now.date().isoformat()
+            sig = Signal(c.option_type, setup_key="spike", prem_sl_pct=strat.prem_sl,
+                         note=f"premium spike {trig.rise:+.1%} in {strat.spike_window_s:.0f}s "
+                              f"(mid {trig.low:.2f}->{trig.mid:.2f})")
+            if (self.store.get("paused", False) or not self.spike_armed() or not self._reentry_ok(strat, sig, day)
+                    or strat.sid not in {s.sid for s in self.enabled_strategies()}):
+                return None
+            if len([p for p in self.positions if p["mode"] == mode]) >= self.cfg.max_open_positions:
+                await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {strat.sid} spike skipped: a position is open", 30)
+                return None
+            capital, available = await self.capital_info(mode)
+            ok, why = self.risk.can_open(mode, capital, now, self.unrealized(mode))
+            if not ok:
+                await self.say_throttled(f"block-{why}", f"⛔ {strat.sid} spike skipped: {why}", 120)
+                return None
+            key = f"{OPT_EXCHANGE}:{c.symbol}"
+            q = (await asyncio.to_thread(self.kite.quote, [key])).get(key) or {}
+            depth = q.get("depth") or {}
+            bid = next((float(lv["price"]) for lv in depth.get("buy", []) if lv.get("price", 0) > 0), trig.bid)
+            ask = next((float(lv["price"]) for lv in depth.get("sell", []) if lv.get("price", 0) > 0), trig.ask)
+            ltp = float(q.get("last_price") or trig.mid)
+            dlt = option_delta((bid + ask) / 2, trig.spot, c.strike, now, c.expiry, self.cfg.risk_free_rate,
+                               c.option_type == CE)
+            pick = StrikeCandidate(c.symbol, c.token, c.strike, c.option_type, c.expiry, c.lot_size, c.tick_size,
+                                   ltp, bid, ask, dlt)
+            if pick.spread_pct > self.cfg.max_spread_pct:
+                await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {strat.sid} spike skipped: spread "
+                                                             f"{pick.spread_pct:.2%}", 30)
+                return None
+            premium = pick.entry_price
+            sz = self.risk.size(mode, capital, available, premium, c.lot_size, strat.capital_pct,
+                                self.lots_setting(mode), premium * (1 - strat.prem_sl))
+            if sz.lots <= 0:
+                await self.say_throttled(f"skip-{strat.sid}", f"⏭️ {strat.sid} spike skipped: {sz.reason}", 30)
+                return None
+            plan = EntryPlan(strat, sig, c.expiry, pick, sz, c.lot_size, 0, "opening spike")
+            regime = self.ctx.regime if self.ctx is not None and self.ctx.today_date == now.date() else "OPENING"
+            shim = _SpikeCtx(now, trig.spot, regime)
+            log.info("spike entry %s, %.0f ms after detection", c.symbol,
+                     (now - trig.detected_at).total_seconds() * 1000)
+            pos, _ = await self.execute_entry(shim, now, mode, plan, capital)
+            if pos is None:
+                return None
+            pos.update(exit_mode="spike", peak_ltp=pos["entry_price"], prem_trail_stop=None,
+                       prem_arm=strat.prem_arm, prem_trail=strat.prem_trail, prem_trail_floor=strat.prem_trail_floor,
+                       prem_max_hold_s=strat.prem_max_hold_s, time_exit=strat.time_exit.strftime("%H:%M"))
+            self._persist(pos)
+            self.store.delete(f"armed_{strat.sid}")          # single trade: no further entries
+            return pos
+
+    async def _manage_spike_exit(self, pos: dict, ltp: float, now: datetime) -> None:
+        """(-6% hard stop handled by monitor.) While not +12%: close after 5 minutes. From +12%:
+        trail 25% under the peak premium, never below entry +1%, for the rest of the day."""
+        entry = float(pos["entry_price"])
+        peak = float(pos.get("peak_ltp") or entry)
+        if ltp > peak:
+            peak = ltp
+            pos["peak_ltp"] = peak
+        armed = peak >= entry * (1 + float(pos["prem_arm"]))
+        if armed:
+            trail_stop = max(round(peak * (1 - float(pos["prem_trail"])), 2),
+                             round(entry * (1 + float(pos["prem_trail_floor"])), 2))
+            if trail_stop != pos.get("prem_trail_stop"):
+                pos["prem_trail_stop"] = trail_stop
+                self._persist(pos)
+            await self._raise_exchange_stop(pos, trail_stop, now)
+            if 0 < ltp <= trail_stop:
+                await self.close(pos, f"premium trail {trail_stop:.2f} (peak {peak:.2f})", floor_price=trail_stop)
+                return
+        hold = int(pos.get("prem_max_hold_s") or 0)
+        if hold and not armed and now - datetime.fromisoformat(pos["entry_time"]) >= timedelta(seconds=hold):
+            await self.close(pos, f"max holding {hold // 60} min")
+            return
+        if now.time() >= min(time.fromisoformat(pos["time_exit"]), self.cfg.squareoff_time):
+            await self.close(pos, "time exit" if now.time() < self.cfg.squareoff_time else "intraday square-off")
+
+    async def _raise_exchange_stop(self, pos: dict, level: float, now: datetime) -> None:
+        """LIVE: move the exchange SL order up to the armed trail (every >= 30 s, by >= 2% of entry)."""
+        if pos["mode"] != "live" or not pos.get("sl_order_id"):
+            return
+        if level < float(pos["prem_stop"]) + max(float(pos.get("tick") or 0.05), 0.02 * float(pos["entry_price"])):
+            return
+        last = pos.get("sl_raised_at")
+        if last and now - datetime.fromisoformat(last) < timedelta(seconds=30):
+            return
+        pos["sl_raised_at"] = now.isoformat()
+        try:
+            await asyncio.to_thread(self.live.modify_stop, pos["sl_order_id"], pos["qty"], level, pos["tick"])
+        except Exception as exc:
+            log.warning("raising exchange SL for %s failed: %s", pos["symbol"], exc)
+            self._persist(pos)
+            return
+        pos["prem_stop"] = level
+        self._persist(pos)
 
     # ------------------------------------------------------------ candles
     async def daily_info(self, now: datetime) -> tuple[dict, float]:
@@ -932,6 +1137,9 @@ class Engine:
                 # SL-limit sits 5% under its trigger and can be skipped in a fast fall: exit ourselves.
                 await self.close(pos, f"premium stop {pos['prem_stop']:.2f} (exchange SL not filled, LTP {ltp:.2f})")
                 continue
+            if pos.get("exit_mode") == "spike":
+                await self._manage_spike_exit(pos, ltp, now)
+                continue
             if not spot_ok:
                 continue
             if pos.get("sl_price") is not None and d * (spot - pos["sl_price"]) <= 0:
@@ -1101,6 +1309,14 @@ class Engine:
         })
         self.positions.remove(pos)
         self.store.delete_position(pos["id"])
+        spike_note = ""
+        if pos["strategy"] in MANUAL_ONLY:
+            disabled = set(self.store.get("disabled", []) or [])
+            disabled.add(pos["strategy"])
+            self.store.set("disabled", sorted(disabled))
+            self.store.delete(f"armed_{pos['strategy']}")
+            spike_note = (f"\n⛔ {pos['strategy']} took its single trade and is now disabled. "
+                          f"/enable {pos['strategy'].replace('SENSEX_', '')} to arm it again.")
         was_cooling = self.store.get(f"{pos['mode']}_cooldown_until")
         self.risk.on_trade_closed(pos["mode"], net)
         started_cooloff = self.store.get(f"{pos['mode']}_cooldown_until") != was_cooling
@@ -1112,6 +1328,7 @@ class Engine:
             f"Charges≈ {fmt_money(charges)} | Net≈ {fmt_money(net)}{bal}"
             + (f"\n⚠️ {self.cfg.max_consecutive_losses} straight losses → {self.cfg.cooloff_hours:.0f}h cool-off."
                if started_cooloff else "")
+            + spike_note
         )
 
     async def squareoff_all(self, reason: str = "manual square-off") -> int:

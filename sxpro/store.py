@@ -75,6 +75,10 @@ class Store:
                 (key, json.dumps(value)),
             )
 
+    def delete(self, key: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM settings WHERE key=?", (key,))
+
     def setdefault(self, key: str, value: Any) -> Any:
         current = self.get(key)
         if current is None:

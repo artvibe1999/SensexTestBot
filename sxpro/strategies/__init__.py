@@ -8,7 +8,16 @@ ADMVE = AdaptiveDirectionalMomentum()
 ALL_STRATEGIES.append(ADMVE)
 STRATEGY_MAP[ADMVE.sid] = ADMVE
 
-__all__ = ["ALL_STRATEGIES", "STRATEGY_MAP", "apply_selection_overrides"]
+# Tick-driven opening premium-spike chase (ported from sensex-pro-bot). MANUAL_ONLY: off at every
+# bot start, armed only by an explicit "/enable SPIKE_22" for the current mode, one trade, then it
+# disables itself; "/enable all" never arms it.
+from .spike22 import OpeningPremiumSpike  # noqa: E402
+SPIKE = OpeningPremiumSpike()
+ALL_STRATEGIES.append(SPIKE)
+STRATEGY_MAP[SPIKE.sid] = SPIKE
+MANUAL_ONLY = frozenset({SPIKE.sid})
+
+__all__ = ["ALL_STRATEGIES", "STRATEGY_MAP", "apply_selection_overrides", "MANUAL_ONLY"]
 
 # Spec values, kept so overrides are idempotent and can be reported.
 SPEC_LIMITS = {s.sid: (s.prem_min, s.prem_max, s.delta_min, s.delta_max) for s in ALL_STRATEGIES}
