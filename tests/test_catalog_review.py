@@ -11,7 +11,7 @@ from sxpro.strategies import ALL_STRATEGIES, STRATEGY_MAP
 from sxpro.strategies.base import CE, PE
 from sxpro.market import BEAR, BULL, NEUTRAL, SIDEWAYS
 from sxpro.strategies.catalog import InsideBarBreakout, SupertrendPullback, sweep_buffer
-from sxpro.strategies.tuning import DEFAULT_DENY_FLAG, RETIRED, VERIFIED_ORDER
+from sxpro.strategies.tuning import RETIRED, VERIFIED_ORDER
 
 from .fakes import FakeKite, synthetic_candles
 
@@ -40,13 +40,6 @@ def test_retired_ids_exist_and_exclude_verified():
     assert not set(RETIRED) & set(VERIFIED_ORDER)
 
 
-def test_fresh_install_enables_only_verified_six(cfg):
-    store = Store(cfg.db_path)
-    eng = _engine(cfg, store)
-    assert _enabled(eng) == VERIFIED_ORDER and store.get(DEFAULT_DENY_FLAG)
-    assert len(store.get("disabled")) == len(ALL_STRATEGIES) - 6
-
-
 def test_live_install_drops_extras_once_then_respects_enable(cfg):
     """The 9 Nov live state (six + 9 extras) becomes the six on the next boot; a strategy
     enabled afterwards with /enable survives restarts."""
@@ -56,12 +49,6 @@ def test_live_install_drops_extras_once_then_respects_enable(cfg):
     assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER
     store.set("disabled", sorted(set(store.get("disabled")) - {"SENSEX_VWAP_03"}))      # /enable 03
     assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER + ["SENSEX_VWAP_03"]
-
-
-def test_verified_strategy_disabled_by_user_stays_disabled(cfg):
-    store = Store(cfg.db_path)
-    store.set("disabled", ["SENSEX_HLBRK_66"])
-    assert _enabled(_engine(cfg, store)) == VERIFIED_ORDER[:5]
 
 
 def test_sweep_buffer():

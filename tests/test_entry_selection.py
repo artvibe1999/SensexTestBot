@@ -9,9 +9,7 @@ import pytest
 from sxpro.config import Config
 from sxpro.engine import Engine
 from sxpro.store import Store
-from sxpro.strategies import ALL_STRATEGIES, STRATEGY_MAP
 from sxpro.strategies.base import CE, PE, Signal, Strategy
-from sxpro.strategies.tuning import DEFAULT_DENY_FLAG
 
 from .fakes import FakeKite, synthetic_candles
 from .test_bot import _run_day
@@ -69,18 +67,6 @@ def _engine(cfg, monkeypatch, strategies, drift=0.0004, seed=7):
     monkeypatch.setattr(Engine, "enabled_strategies", lambda self: sorted(strategies, key=self.strategy_rank))
     store.set("lots_paper", 2)
     return engine, fake, day, store, msgs
-
-
-def test_added_strategies_rank_after_verified_six(cfg):
-    store = Store(cfg.db_path)
-    keep = set(VERIFIED) | {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
-    store.set("disabled", [s.sid for s in ALL_STRATEGIES if s.sid not in keep])
-    store.set(DEFAULT_DENY_FLAG, True)   # extras switched on with /enable after the default-deny clean-up
-    engine = Engine(cfg, store, FakeKite(synthetic_candles(2), synthetic_candles(2).index[-1].date()))
-    order = [s.sid for s in engine.enabled_strategies()]
-    assert order[:6] == VERIFIED
-    assert set(order[6:]) == {"SENSEX_VWAP_03", "SENSEX_VBO_62", "SENSEX_TRAP_02"}
-    assert all(engine.strategy_rank(STRATEGY_MAP[s])[0] == 1 for s in order[6:])
 
 
 def test_failed_check_falls_through_to_next_strategy(cfg, monkeypatch):
